@@ -29,6 +29,7 @@ import {
   DataTablePage,
   useDataTable,
 } from '@/components/data-table'
+import { usePerformanceDimensions } from '@/features/performance-metrics/hooks/use-performance-dimensions'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 
@@ -59,9 +60,16 @@ function isDisabledUserRow(user: User) {
   return isUserDeleted(user) || user.status === USER_STATUS.DISABLED
 }
 
+function getUserRowClassName(user: User, isMobile: boolean) {
+  if (!isDisabledUserRow(user)) return undefined
+  return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+}
+
 export function UsersTable() {
   const { t } = useTranslation()
-  const columns = useUsersColumns()
+  const { metricsById: performanceMetricsById } =
+    usePerformanceDimensions('user')
+  const columns = useUsersColumns(performanceMetricsById)
   const { refreshTrigger } = useUsers()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const [sorting, setSorting] = useState<SortingState>([])
@@ -233,11 +241,7 @@ export function UsersTable() {
         ],
       }}
       getRowClassName={(row, { isMobile }) =>
-        isDisabledUserRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
+        getUserRowClassName(row.original, isMobile)
       }
       bulkActions={<DataTableBulkActions table={table} />}
     />

@@ -256,6 +256,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+	recordSuccessfulRelayDimensions(ctx, relayInfo, perfmetrics.DimensionUsage{
+		CacheEligible: !common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens) && usage.InputTokens > 0,
+		InputTokens:   int64(usage.InputTokens),
+		CachedTokens:  int64(usage.InputTokenDetails.CachedTokens),
+	})
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
@@ -378,6 +383,15 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+	})
+	inputTokens := usage.InputTokens
+	if inputTokens <= 0 {
+		inputTokens = usage.PromptTokens
+	}
+	recordSuccessfulRelayDimensions(ctx, relayInfo, perfmetrics.DimensionUsage{
+		CacheEligible: !common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens) && !commonUsageIsEstimated(usage) && inputTokens > 0,
+		InputTokens:   int64(inputTokens),
+		CachedTokens:  int64(usage.PromptTokensDetails.CachedTokens),
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))

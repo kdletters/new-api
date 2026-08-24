@@ -73,6 +73,44 @@ func GetPerfMetrics(c *gin.Context) {
 	})
 }
 
+func GetPerfMetricDimensions(c *gin.Context) {
+	dimension := c.Query("dimension")
+	if !perfmetrics.IsValidDimension(dimension) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "dimension must be one of: channel, user, token",
+		})
+		return
+	}
+
+	hours := 24
+	if rawHours := c.Query("hours"); rawHours != "" {
+		parsed, err := strconv.Atoi(rawHours)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "hours must be an integer",
+			})
+			return
+		}
+		hours = parsed
+	}
+
+	result, err := perfmetrics.QueryDimensions(dimension, hours)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}
+
 func filterActiveGroups(groups []perfmetrics.GroupResult) []perfmetrics.GroupResult {
 	activeRatios := ratio_setting.GetGroupRatioCopy()
 	return lo.Filter(groups, func(g perfmetrics.GroupResult, _ int) bool {

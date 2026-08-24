@@ -59,3 +59,30 @@ export type PerfSummaryAllData = {
     models: PerfModelSummary[]
   }
 }
+
+export type PerformanceDimension = 'channel' | 'user' | 'token'
+
+export type PerformanceDimensionItem = {
+  id: number
+  name: string
+  request_count: number
+  success_count: number
+  failure_count: number
+  success_rate: number
+  cache_eligible_count: number
+  cache_hit_count: number
+  cache_hit_rate: number
+  input_tokens: number
+  cached_tokens: number
+  cached_token_rate: number
+}
+
+export type PerformanceDimensionsData = {
+  success: boolean
+  message?: string
+  data: {
+    dimension: PerformanceDimension
+    hours: number
+    items: PerformanceDimensionItem[]
+  }
+}

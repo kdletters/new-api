@@ -30,6 +30,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { DimensionMetricsCell } from '@/features/performance-metrics/components/dimension-metrics-cell'
+import type { PerformanceDimensionItem } from '@/features/performance-metrics/types'
 import { formatQuota, formatTimestamp } from '@/lib/format'
 
 import {
@@ -42,7 +44,9 @@ import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { UserQuotaCell } from './user-quota-cell'
 
-export function useUsersColumns(): ColumnDef<User>[] {
+export function useUsersColumns(
+  performanceMetricsById?: ReadonlyMap<number, PerformanceDimensionItem>
+): ColumnDef<User>[] {
   const { t } = useTranslation()
   return [
     {
@@ -190,6 +194,18 @@ export function useUsersColumns(): ColumnDef<User>[] {
       },
       size: 140,
       meta: { mobileOrder: 30 },
+    },
+    {
+      id: 'performance',
+      header: `${t('Performance')} · 24h`,
+      cell: ({ row }) => (
+        <DimensionMetricsCell
+          metrics={performanceMetricsById?.get(row.original.id)}
+        />
+      ),
+      size: 320,
+      enableSorting: false,
+      meta: { mobileOrder: 50 },
     },
     {
       accessorKey: 'role',

@@ -18,7 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import type { PerformanceMetricsData, PerfSummaryAllData } from './types'
+import type {
+  PerformanceDimension,
+  PerformanceDimensionsData,
+  PerformanceMetricsData,
+  PerfSummaryAllData,
+} from './types'
 
 export async function getPerfMetricsSummary(
   hours = 24
@@ -39,5 +44,18 @@ export async function getPerfMetrics(
       hours,
     },
   })
+  return res.data
+}
+
+export async function getPerfMetricsDimensions(
+  dimension: PerformanceDimension,
+  hours = 24
+): Promise<PerformanceDimensionsData> {
+  const res = await api.get<PerformanceDimensionsData>(
+    '/api/perf-metrics/dimensions',
+    {
+      params: { dimension, hours },
+    }
+  )
   return res.data
 }

@@ -642,3 +642,12 @@ func TestChannelSettingsValidateHTTPTransport(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "http2_connection_shards")
 }
+
+func TestChannelSettingsValidateRPM(t *testing.T) {
+	require.NoError(t, (&ChannelSettings{}).ValidateRPM())
+	require.NoError(t, (&ChannelSettings{RPM: 120}).ValidateRPM())
+
+	err := (&ChannelSettings{RPM: -1}).ValidateRPM()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rpm")
+}

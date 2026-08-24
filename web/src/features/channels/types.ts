@@ -351,6 +351,7 @@ export interface ChannelFormData {
   model_mapping?: string
   priority?: number
   weight?: number
+  rpm?: number
   test_model?: string
   auto_ban?: number
   status: number

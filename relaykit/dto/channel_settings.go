@@ -23,6 +23,9 @@ type ChannelSettings struct {
 	// HTTP2ConnectionShards spreads HTTP/2 traffic across N independent transports
 	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
 	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
+	// RPM limits how many requests may be sent to this channel per minute.
+	// Zero means unlimited.
+	RPM int `json:"rpm,omitempty"`
 }
 
 const (
@@ -47,6 +50,17 @@ func (s *ChannelSettings) ValidateHTTPTransport() error {
 	}
 	if protocol == HTTPProtocolHTTP1 && s.HTTP2ConnectionShards > 1 {
 		return fmt.Errorf("http2_connection_shards must be 1 when http_protocol is http1")
+	}
+	return nil
+}
+
+// ValidateRPM validates the per-channel requests-per-minute limit.
+func (s *ChannelSettings) ValidateRPM() error {
+	if s == nil {
+		return nil
+	}
+	if s.RPM < 0 {
+		return fmt.Errorf("invalid rpm: %d", s.RPM)
 	}
 	return nil
 }

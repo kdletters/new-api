@@ -193,10 +193,72 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
-		if channelErr != nil {
-			logger.LogError(c, channelErr.Error())
-			newAPIError = channelErr
+		var channel *model.Channel
+		var channelRPMRetryAfter time.Duration
+		for {
+			var channelErr *types.NewAPIError
+			channel, channelErr = getChannel(c, relayInfo, retryParam)
+			if channelErr != nil {
+				if relayInfo.LastError != nil && errors.Is(channelErr, service.ErrNoAvailableChannel) {
+					newAPIError = relayInfo.LastError
+				} else if retryParam.HasDeprioritizedChannels() && errors.Is(channelErr, service.ErrNoAvailableChannel) {
+					seconds := int64((channelRPMRetryAfter + time.Second - 1) / time.Second)
+					if seconds > 0 {
+						c.Header("Retry-After", fmt.Sprintf("%d", seconds))
+					}
+					newAPIError = types.NewErrorWithStatusCode(
+						errors.New("all available channels have reached their RPM limits"),
+						types.ErrorCodeChannelRateLimited,
+						http.StatusTooManyRequests,
+						types.ErrOptionWithSkipRetry(),
+						types.ErrOptionWithNoRecordErrorLog(),
+					)
+				} else {
+					logger.LogError(c, channelErr.Error())
+					newAPIError = channelErr
+				}
+				break
+			}
+
+			allowed, retryAfter := service.TakeChannelRPM(c.Request.Context(), channel.Id, channel.GetRPM())
+			if allowed {
+				break
+			}
+			if channelRPMRetryAfter == 0 || (retryAfter > 0 && retryAfter < channelRPMRetryAfter) {
+				channelRPMRetryAfter = retryAfter
+			}
+			if _, alreadyDeprioritized := retryParam.DeprioritizedChannelIDs[channel.Id]; alreadyDeprioritized {
+				seconds := int64((channelRPMRetryAfter + time.Second - 1) / time.Second)
+				if seconds > 0 {
+					c.Header("Retry-After", fmt.Sprintf("%d", seconds))
+				}
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("all available channels have reached their RPM limits"),
+					types.ErrorCodeChannelRateLimited,
+					http.StatusTooManyRequests,
+					types.ErrOptionWithSkipRetry(),
+					types.ErrOptionWithNoRecordErrorLog(),
+				)
+				break
+			}
+			retryParam.DeprioritizeChannel(channel.Id)
+			logger.LogInfo(c, fmt.Sprintf("channel #%d reached its RPM limit; selecting another channel", channel.Id))
+			if _, specificChannel := c.Get("specific_channel_id"); specificChannel {
+				seconds := int64((channelRPMRetryAfter + time.Second - 1) / time.Second)
+				if seconds > 0 {
+					c.Header("Retry-After", fmt.Sprintf("%d", seconds))
+				}
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("the selected channel has reached its RPM limit"),
+					types.ErrorCodeChannelRateLimited,
+					http.StatusTooManyRequests,
+					types.ErrOptionWithSkipRetry(),
+					types.ErrOptionWithNoRecordErrorLog(),
+				)
+				break
+			}
+		}
+		if newAPIError != nil {
 			break
 		}
 		addUsedChannel(c, channel.Id)
@@ -238,7 +300,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !prepareChannelRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry(), retryParam, channel.Id) {
 			break
 		}
 	}
@@ -249,8 +311,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
+		userId := relayInfo.UserId
+		userName := c.GetString("username")
+		tokenId := relayInfo.TokenId
+		tokenName := c.GetString("token_name")
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
+			perfmetrics.RecordFinalRequestFailure(userId, userName, tokenId, tokenName)
 		})
 	}
 }
@@ -298,25 +365,29 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
-	if info.ChannelMeta == nil {
+	if info.ChannelMeta == nil && !retryParam.HasDeprioritizedChannels() {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
 		if !autoBan {
 			autoBanInt = 0
 		}
-		return &model.Channel{
+		channel := &model.Channel{
 			Id:      c.GetInt("channel_id"),
 			Type:    c.GetInt("channel_type"),
 			Name:    c.GetString("channel_name"),
 			AutoBan: &autoBanInt,
-		}, nil
+		}
+		if channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting); ok {
+			channel.SetSetting(channelSetting)
+		}
+		return channel, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("%w: 分组 %s 下模型 %s 的可用渠道不存在（retry）", service.ErrNoAvailableChannel, selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
@@ -360,8 +431,24 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+func prepareChannelRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, retryParam *service.RetryParam, channelID int) bool {
+	if !shouldRetry(c, openaiErr, retryTimes) {
+		return false
+	}
+	if _, specificChannel := c.Get("specific_channel_id"); specificChannel {
+		return false
+	}
+	retryParam.DeprioritizeChannel(channelID)
+	return true
+}
+
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
+	channelId := channelError.ChannelId
+	channelName := channelError.ChannelName
+	gopool.Go(func() {
+		perfmetrics.RecordChannelAttemptFailure(channelId, channelName)
+	})
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {

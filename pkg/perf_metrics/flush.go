@@ -19,8 +19,47 @@ func flushLoop() {
 			continue
 		}
 		flushCompletedBuckets()
+		flushCompletedDimensionBuckets()
 		cleanupExpiredMetrics(setting.RetentionDays)
 	}
+}
+
+func flushCompletedDimensionBuckets() {
+	currentBucket := bucketStart(time.Now().Unix())
+	dimensionHotBuckets.Range(func(rawKey, rawValue any) bool {
+		key := rawKey.(dimensionBucketKey)
+		if key.bucketTs >= currentBucket {
+			return true
+		}
+
+		bucket := rawValue.(*atomicDimensionBucket)
+		name, drained := bucket.drain()
+		if drained.requestCount == 0 {
+			deleteOldEmptyDimensionBucket(key, rawKey)
+			return true
+		}
+
+		err := model.UpsertPerfDimensionMetric(&model.PerfDimensionMetric{
+			Dimension:          key.dimension,
+			EntityId:           key.entityId,
+			EntityName:         name,
+			BucketTs:           key.bucketTs,
+			RequestCount:       drained.requestCount,
+			SuccessCount:       drained.successCount,
+			CacheEligibleCount: drained.cacheEligibleCount,
+			CacheHitCount:      drained.cacheHitCount,
+			InputTokens:        drained.inputTokens,
+			CachedTokens:       drained.cachedTokens,
+		})
+		if err != nil {
+			bucket.addCounters(name, drained)
+			common.SysError(fmt.Sprintf("failed to flush perf dimension metric dimension=%s entity=%d bucket=%d: %s", key.dimension, key.entityId, key.bucketTs, err.Error()))
+			return true
+		}
+
+		deleteOldEmptyDimensionBucket(key, rawKey)
+		return true
+	})
 }
 
 func flushCompletedBuckets() {
@@ -67,6 +106,12 @@ func deleteOldEmptyBucket(k bucketKey, rawKey any) {
 	}
 }
 
+func deleteOldEmptyDimensionBucket(key dimensionBucketKey, rawKey any) {
+	if key.bucketTs < bucketStart(time.Now().Add(-24*time.Hour).Unix()) {
+		dimensionHotBuckets.Delete(rawKey)
+	}
+}
+
 func cleanupExpiredMetrics(retentionDays int) {
 	if retentionDays <= 0 {
 		return
@@ -74,6 +119,9 @@ func cleanupExpiredMetrics(retentionDays int) {
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).Unix()
 	if err := model.DeletePerfMetricsBefore(cutoff); err != nil {
 		common.SysError("failed to cleanup expired perf metrics: " + err.Error())
+	}
+	if err := model.DeletePerfDimensionMetricsBefore(cutoff); err != nil {
+		common.SysError("failed to cleanup expired perf dimension metrics: " + err.Error())
 	}
 }
 

@@ -77,6 +77,7 @@ function ChannelCardComponent({
   const balanceCell = renderCell('balance')
   const responseCell = renderCell('response_time')
   const testCell = renderCell('test_time')
+  const performanceCell = renderCell('performance')
 
   const labelClass = 'text-muted-foreground text-[11px] font-medium select-none'
 
@@ -172,6 +173,11 @@ function ChannelCardComponent({
           ) : (
             <span className='text-muted-foreground text-sm'>-</span>
           )}
+        </div>
+
+        <div className='min-w-0'>
+          <div className={cn('mb-1', labelClass)}>{t('Performance')} · 24h</div>
+          {performanceCell}
         </div>
       </div>
     </ChannelRowActionsLayoutContext.Provider>

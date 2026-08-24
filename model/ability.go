@@ -146,6 +146,111 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 	return &channel, err
 }
 
+// GetChannelDeprioritizing is the database-backed selection path used when a relay
+// request has already rejected one or more local candidates. Those candidates
+// are deprioritized for this request, but remain eligible after all other
+// candidates have been tried.
+func GetChannelDeprioritizing(group string, model string, retry int, requestPath string, deprioritizedChannelIDs map[int]struct{}) (*Channel, error) {
+	if len(deprioritizedChannelIDs) == 0 {
+		return GetChannel(group, model, retry, requestPath)
+	}
+	// A demoted channel must not consume the normal priority retry slot:
+	// always select the highest-priority non-demoted candidate first.
+	retry = 0
+	var abilities []Ability
+	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Order("priority DESC").
+		Order("weight DESC").
+		Find(&abilities).Error
+	if err != nil {
+		return nil, err
+	}
+	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	preferred := make([]Ability, 0, len(abilities))
+	deprioritized := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if _, demoted := deprioritizedChannelIDs[ability.ChannelId]; demoted {
+			deprioritized = append(deprioritized, ability)
+		} else {
+			preferred = append(preferred, ability)
+		}
+	}
+	if len(preferred) == 0 {
+		preferred = deprioritized
+		deprioritized = nil
+	}
+	if len(preferred) == 0 {
+		return nil, nil
+	}
+
+	priorities := make([]int64, 0)
+	seenPriorities := make(map[int64]struct{})
+	for _, ability := range preferred {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		if _, seen := seenPriorities[priority]; seen {
+			continue
+		}
+		seenPriorities[priority] = struct{}{}
+		priorities = append(priorities, priority)
+	}
+	targetAbilities := preferred
+	if retry >= len(priorities) && len(deprioritized) > 0 {
+		targetAbilities = deprioritized
+		priorities = nil
+		seenPriorities = make(map[int64]struct{})
+		for _, ability := range targetAbilities {
+			priority := int64(0)
+			if ability.Priority != nil {
+				priority = *ability.Priority
+			}
+			if _, seen := seenPriorities[priority]; !seen {
+				seenPriorities[priority] = struct{}{}
+				priorities = append(priorities, priority)
+			}
+		}
+		retry = 0
+	}
+	if retry >= len(priorities) {
+		retry = len(priorities) - 1
+	}
+	targetPriority := priorities[retry]
+	selectedAbilities := make([]Ability, 0, len(targetAbilities))
+	weightSum := uint(0)
+	for _, ability := range targetAbilities {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		if priority != targetPriority {
+			continue
+		}
+		selectedAbilities = append(selectedAbilities, ability)
+		weightSum += ability.Weight + 10
+	}
+	if len(selectedAbilities) == 0 {
+		return nil, nil
+	}
+
+	weight := common.GetRandomInt(int(weightSum))
+	channelID := 0
+	for _, ability := range selectedAbilities {
+		weight -= int(ability.Weight) + 10
+		if weight <= 0 {
+			channelID = ability.ChannelId
+			break
+		}
+	}
+	if channelID == 0 {
+		channelID = selectedAbilities[len(selectedAbilities)-1].ChannelId
+	}
+	channel := Channel{}
+	err = DB.First(&channel, "id = ?", channelID).Error
+	return &channel, err
+}
+
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and
 // model for the DB (non-memory-cache) selection path. Only Advanced Custom
 // (type 58) channels are path-checked: kept only when one of their routes matches

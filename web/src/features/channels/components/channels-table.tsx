@@ -42,6 +42,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { usePerformanceDimensions } from '@/features/performance-metrics/hooks/use-performance-dimensions'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getLobeIcon } from '@/lib/lobe-icon'
@@ -97,6 +98,8 @@ export function ChannelsTable() {
     setSensitiveVisible,
   } = useChannels()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const { metricsById: performanceMetricsById } =
+    usePerformanceDimensions('channel')
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
@@ -305,7 +308,10 @@ export function ChannelsTable() {
   const typeCounts = data?.data?.type_counts
 
   // Columns configuration
-  const columns = useChannelsColumns({ enableSelection: batchMode })
+  const columns = useChannelsColumns({
+    enableSelection: batchMode,
+    performanceMetricsById,
+  })
 
   // React Table instance
   const { table } = useDataTable({

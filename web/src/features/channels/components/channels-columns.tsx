@@ -46,6 +46,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { DimensionMetricsCell } from '@/features/performance-metrics/components/dimension-metrics-cell'
+import type { PerformanceDimensionItem } from '@/features/performance-metrics/types'
 import { toIntlLocale } from '@/i18n/languages'
 import {
   formatCurrencyFromUSD,
@@ -587,11 +589,13 @@ export function BalanceCell({ channel }: { channel: Channel }) {
 export function useChannelsColumns(
   options: {
     enableSelection?: boolean
+    performanceMetricsById?: ReadonlyMap<number, PerformanceDimensionItem>
   } = {}
 ): ColumnDef<Channel>[] {
   const { t, i18n } = useTranslation()
   const { sensitiveVisible } = useChannels()
   const enableSelection = options.enableSelection ?? true
+  const performanceMetricsById = options.performanceMetricsById
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   // The column definitions only depend on the translation function, the active
   // locale, and sensitive-data visibility. Memoizing keeps the array (and every
@@ -1201,6 +1205,23 @@ export function useChannelsColumns(
         enableSorting: false,
       },
 
+      {
+        id: 'performance',
+        header: `${t('Performance')} · 24h`,
+        cell: ({ row }) => {
+          if (isTagAggregateRow(row.original)) {
+            return <DimensionMetricsCell />
+          }
+          return (
+            <DimensionMetricsCell
+              metrics={performanceMetricsById?.get(row.original.id)}
+            />
+          )
+        },
+        size: 320,
+        enableSorting: false,
+      },
+
       // Actions column
       {
         id: 'actions',
@@ -1225,6 +1246,6 @@ export function useChannelsColumns(
         meta: { pinned: 'right' as const },
       },
     ],
-    [enableSelection, t, locale, sensitiveVisible]
+    [enableSelection, t, locale, sensitiveVisible, performanceMetricsById]
   )
 }
