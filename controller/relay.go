@@ -198,6 +198,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		// The previous attempt's error is only the final fallback when channel
+		// selection cannot find another channel. Clear it before starting this
+		// attempt so a newly selected channel is actually tried.
+		newAPIError = nil
 		var channel *model.Channel
 		var channelRPMRetryAfter time.Duration
 		for {
