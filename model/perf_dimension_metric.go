@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -47,6 +48,28 @@ func UpsertPerfDimensionMetric(metric *PerfDimensionMetric) error {
 			"cached_tokens":        gorm.Expr("perf_dimension_metrics.cached_tokens + ?", metric.CachedTokens),
 		}),
 	}).Create(metric).Error
+}
+
+// ReplacePerfDimensionMetrics replaces an already completed bucket range with
+// absolute counters. Unlike UpsertPerfDimensionMetric, this operation is
+// idempotent and is intended for reconstruction from authoritative logs.
+func ReplacePerfDimensionMetrics(startTs int64, endTs int64, metrics []PerfDimensionMetric) error {
+	if DB == nil {
+		return errors.New("main database is not initialized")
+	}
+	if startTs >= endTs {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("bucket_ts >= ? AND bucket_ts < ?", startTs, endTs).
+			Delete(&PerfDimensionMetric{}).Error; err != nil {
+			return err
+		}
+		if len(metrics) == 0 {
+			return nil
+		}
+		return tx.CreateInBatches(&metrics, 500).Error
+	})
 }
 
 func GetPerfDimensionMetrics(dimension string, startTs int64, endTs int64) ([]PerfDimensionMetric, error) {

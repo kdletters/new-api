@@ -11,10 +11,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -277,6 +279,9 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	assert.Equal(t, int64(1), count.Load(), "no chunk after disconnect should be processed")
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	info.IsStream = true
+	assert.True(t, service.IsFinalRelayChannelAttemptSuccessful(info))
+	assert.False(t, service.IsFinalRelayRequestSuccessful(c, info))
 
 	body := recorder.Body.String()
 	assert.Contains(t, body, "first")
@@ -394,6 +399,9 @@ func TestStreamScannerHandler_StreamStatus_DoneReason(t *testing.T) {
 	assert.Nil(t, info.StreamStatus.EndError)
 	assert.True(t, info.StreamStatus.IsNormalEnd())
 	assert.False(t, info.StreamStatus.HasErrors())
+	info.IsStream = true
+	assert.True(t, service.IsFinalRelayChannelAttemptSuccessful(info))
+	assert.True(t, service.IsFinalRelayRequestSuccessful(c, info))
 }
 
 func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
@@ -410,6 +418,26 @@ func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.EndReason)
 	assert.True(t, info.StreamStatus.IsNormalEnd())
+}
+
+func TestStreamScannerHandler_ScannerErrorFailsChannelAndFinalRequest(t *testing.T) {
+	t.Parallel()
+
+	readErr := fmt.Errorf("upstream stream read failed")
+	body := io.MultiReader(
+		strings.NewReader("data: {\"id\":1}\n"),
+		iotest.ErrReader(readErr),
+	)
+	c, resp, info := setupStreamTest(t, body)
+
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonScannerErr, info.StreamStatus.EndReason)
+	assert.ErrorIs(t, info.StreamStatus.EndError, readErr)
+	info.IsStream = true
+	assert.False(t, service.IsFinalRelayChannelAttemptSuccessful(info))
+	assert.False(t, service.IsFinalRelayRequestSuccessful(c, info))
 }
 
 func TestStreamScannerHandler_StreamStatus_HandlerStop(t *testing.T) {
@@ -486,6 +514,9 @@ func TestStreamScannerHandler_StreamStatus_Timeout(t *testing.T) {
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
 	assert.False(t, info.StreamStatus.IsNormalEnd())
+	info.IsStream = true
+	assert.False(t, service.IsFinalRelayChannelAttemptSuccessful(info))
+	assert.False(t, service.IsFinalRelayRequestSuccessful(c, info))
 }
 
 func TestStreamScannerHandler_StreamStatus_SoftErrors(t *testing.T) {
@@ -502,6 +533,9 @@ func TestStreamScannerHandler_StreamStatus_SoftErrors(t *testing.T) {
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 	assert.True(t, info.StreamStatus.HasErrors())
 	assert.Equal(t, 10, info.StreamStatus.TotalErrorCount())
+	info.IsStream = true
+	assert.False(t, service.IsFinalRelayChannelAttemptSuccessful(info))
+	assert.False(t, service.IsFinalRelayRequestSuccessful(c, info))
 }
 
 func TestStreamScannerHandler_StreamStatus_MultipleErrorsPerChunk(t *testing.T) {

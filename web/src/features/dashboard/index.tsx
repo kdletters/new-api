@@ -37,6 +37,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { ModelsChartPreferences } from './components/models/models-chart-preferences'
 import { ModelsFilter } from './components/models/models-filter-dialog'
+import { DimensionPerformancePanel } from './components/overview/dimension-performance-panel'
 import { OverviewDashboard } from './components/overview/overview-dashboard'
 import { DEFAULT_TIME_GRANULARITY } from './constants'
 import {
@@ -356,13 +357,18 @@ export function Dashboard() {
                 </Suspense>
               </FadeIn>
               {isAdmin && (
-                <FadeIn delay={0.05}>
-                  <Suspense fallback={<PerformanceOverviewFallback />}>
-                    <LazyPerformanceOverview />
-                  </Suspense>
-                </FadeIn>
+                <>
+                  <FadeIn delay={0.05}>
+                    <Suspense fallback={<PerformanceOverviewFallback />}>
+                      <LazyPerformanceOverview />
+                    </Suspense>
+                  </FadeIn>
+                  <FadeIn delay={0.1}>
+                    <DimensionPerformancePanel />
+                  </FadeIn>
+                </>
               )}
-              <FadeIn delay={0.1}>
+              <FadeIn delay={0.15}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyConsumptionDistributionChart
                     data={modelData}
@@ -376,7 +382,7 @@ export function Dashboard() {
                   />
                 </Suspense>
               </FadeIn>
-              <FadeIn delay={0.15}>
+              <FadeIn delay={0.2}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyModelCharts
                     data={modelData}

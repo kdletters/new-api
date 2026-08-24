@@ -21,6 +21,11 @@ var hotBuckets sync.Map
 const seriesSchema = "dbcd0a3c01b55203"
 
 func Init() {
+	if common.IsMasterNode && perf_metrics_setting.GetSetting().Enabled && !common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		if err := runDimensionMetricsBackfill(defaultDimensionBackfillHours, time.Now()); err != nil {
+			common.SysError("failed to backfill completed dimension metrics: " + err.Error())
+		}
+	}
 	go flushLoop()
 }
 

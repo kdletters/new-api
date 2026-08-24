@@ -62,11 +62,13 @@ func TestDimensionMetricsUseAttemptAndFinalRequestSemantics(t *testing.T) {
 		},
 	}
 
-	RecordRelayDimensionSuccess(info, "channel-a", "alice", "key-label", DimensionUsage{
+	usage := DimensionUsage{
 		CacheEligible: true,
 		InputTokens:   100,
 		CachedTokens:  25,
-	})
+	}
+	RecordChannelAttemptSuccess(info, "channel-a", usage)
+	RecordFinalRequestSuccess(info.UserId, "alice", info.TokenId, "key-label", usage)
 	RecordChannelAttemptFailure(11, "channel-a")
 	RecordFinalRequestFailure(21, "alice", 31, "key-label")
 
@@ -104,10 +106,39 @@ func TestDimensionMetricsKeepInternalTokenWithoutRawKey(t *testing.T) {
 		},
 	}
 
-	RecordRelayDimensionSuccess(info, "channel-b", "bob", "", DimensionUsage{})
+	RecordChannelAttemptSuccess(info, "channel-b", DimensionUsage{})
+	RecordFinalRequestSuccess(info.UserId, "bob", info.TokenId, "", DimensionUsage{})
 
 	result, err := QueryDimensions(DimensionToken, 24)
 	require.NoError(t, err)
 	token := findDimensionItem(t, result, 0)
 	assert.Equal(t, InternalTokenName, token.Name)
+}
+
+func TestFinalRequestFailureDoesNotTurnSuccessfulChannelAttemptIntoFailure(t *testing.T) {
+	setupDimensionMetricsTest(t)
+	info := &relaycommon.RelayInfo{
+		UserId:  23,
+		TokenId: 33,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: 13,
+		},
+	}
+
+	RecordChannelAttemptSuccess(info, "channel-c", DimensionUsage{})
+	RecordFinalRequestFailure(info.UserId, "carol", info.TokenId, "key-c")
+
+	channelResult, err := QueryDimensions(DimensionChannel, 24)
+	require.NoError(t, err)
+	channel := findDimensionItem(t, channelResult, info.ChannelId)
+	assert.EqualValues(t, 1, channel.RequestCount)
+	assert.EqualValues(t, 1, channel.SuccessCount)
+	assert.EqualValues(t, 0, channel.FailureCount)
+
+	userResult, err := QueryDimensions(DimensionUser, 24)
+	require.NoError(t, err)
+	user := findDimensionItem(t, userResult, info.UserId)
+	assert.EqualValues(t, 1, user.RequestCount)
+	assert.EqualValues(t, 0, user.SuccessCount)
+	assert.EqualValues(t, 1, user.FailureCount)
 }

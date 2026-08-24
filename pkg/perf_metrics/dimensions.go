@@ -101,7 +101,7 @@ func IsValidDimension(dimension string) bool {
 	}
 }
 
-func RecordRelayDimensionSuccess(info *relaycommon.RelayInfo, channelName string, userName string, tokenName string, usage DimensionUsage) {
+func RecordChannelAttemptSuccess(info *relaycommon.RelayInfo, channelName string, usage DimensionUsage) {
 	if info == nil {
 		return
 	}
@@ -109,15 +109,18 @@ func RecordRelayDimensionSuccess(info *relaycommon.RelayInfo, channelName string
 		dimension: DimensionChannel, entityId: info.ChannelId, entityName: channelName,
 		success: true, cacheEligible: usage.CacheEligible, inputTokens: usage.InputTokens, cachedTokens: usage.CachedTokens,
 	})
+}
+
+func RecordFinalRequestSuccess(userId int, userName string, tokenId int, tokenName string, usage DimensionUsage) {
 	recordDimension(dimensionSample{
-		dimension: DimensionUser, entityId: info.UserId, entityName: userName,
+		dimension: DimensionUser, entityId: userId, entityName: userName,
 		success: true, cacheEligible: usage.CacheEligible, inputTokens: usage.InputTokens, cachedTokens: usage.CachedTokens,
 	})
-	if info.TokenId == 0 && strings.TrimSpace(tokenName) == "" {
+	if tokenId == 0 && strings.TrimSpace(tokenName) == "" {
 		tokenName = InternalTokenName
 	}
 	recordDimension(dimensionSample{
-		dimension: DimensionToken, entityId: info.TokenId, entityName: tokenName,
+		dimension: DimensionToken, entityId: tokenId, entityName: tokenName,
 		success: true, cacheEligible: usage.CacheEligible, inputTokens: usage.InputTokens, cachedTokens: usage.CachedTokens,
 	})
 }

@@ -75,9 +75,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError *types.NewAPIError
-		ws          *websocket.Conn
+		newAPIError    *types.NewAPIError
+		ws             *websocket.Conn
+		relayInfo      *relaycommon.RelayInfo
+		requestSuccess bool
 	)
+	defer func() {
+		service.RecordFinalRelayDimensionOutcome(c, relayInfo, requestSuccess)
+	}()
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		var err error
@@ -120,7 +125,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
@@ -292,6 +297,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			requestSuccess = service.IsFinalRelayRequestSuccessful(c, relayInfo)
 			return
 		}
 
@@ -311,13 +317,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
-		userId := relayInfo.UserId
-		userName := c.GetString("username")
-		tokenId := relayInfo.TokenId
-		tokenName := c.GetString("token_name")
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
-			perfmetrics.RecordFinalRequestFailure(userId, userName, tokenId, tokenName)
 		})
 	}
 }

@@ -10,16 +10,74 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const contextKeyPerfDimensionUsage = "perf_dimension_usage"
+
 func recordSuccessfulRelayDimensions(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage perfmetrics.DimensionUsage) {
 	if ctx == nil || relayInfo == nil {
 		return
 	}
 	infoCopy := *relayInfo
 	channelName := ctx.GetString("channel_name")
+	ctx.Set(contextKeyPerfDimensionUsage, usage)
+	channelSuccess := IsFinalRelayChannelAttemptSuccessful(relayInfo)
+	gopool.Go(func() {
+		if channelSuccess {
+			perfmetrics.RecordChannelAttemptSuccess(&infoCopy, channelName, usage)
+			return
+		}
+		perfmetrics.RecordChannelAttemptFailure(infoCopy.ChannelId, channelName)
+	})
+}
+
+func IsFinalRelayChannelAttemptSuccessful(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+		return true
+	}
+	if relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
+		return true
+	}
+	return relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors()
+}
+
+func IsFinalRelayRequestSuccessful(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
+	if ctx == nil {
+		return false
+	}
+	if ctx.Request != nil && ctx.Request.Context().Err() != nil {
+		return false
+	}
+	if relayInfo == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+		return true
+	}
+	if relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
+		return false
+	}
+	return IsFinalRelayChannelAttemptSuccessful(relayInfo)
+}
+
+func RecordFinalRelayDimensionOutcome(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, success bool) {
+	if ctx == nil {
+		return
+	}
+	userId := ctx.GetInt("id")
+	tokenId := ctx.GetInt("token_id")
+	if relayInfo != nil {
+		userId = relayInfo.UserId
+		tokenId = relayInfo.TokenId
+	}
+	if userId <= 0 {
+		return
+	}
 	userName := ctx.GetString("username")
 	tokenName := ctx.GetString("token_name")
+	usage, _ := ctx.Get(contextKeyPerfDimensionUsage)
+	dimensionUsage, _ := usage.(perfmetrics.DimensionUsage)
 	gopool.Go(func() {
-		perfmetrics.RecordRelayDimensionSuccess(&infoCopy, channelName, userName, tokenName, usage)
+		if success {
+			perfmetrics.RecordFinalRequestSuccess(userId, userName, tokenId, tokenName, dimensionUsage)
+			return
+		}
+		perfmetrics.RecordFinalRequestFailure(userId, userName, tokenId, tokenName)
 	})
 }
 

@@ -80,6 +80,31 @@ type Log struct {
 	Other             string `json:"other"`
 }
 
+const perfDimensionBackfillBatchSize = 1000
+
+// ScanPerfDimensionBackfillLogs reads relay outcome logs from the configured
+// log database in bounded batches. The callback must not retain the slice.
+func ScanPerfDimensionBackfillLogs(startTs int64, endTs int64, callback func([]Log) error) error {
+	if LOG_DB == nil {
+		return errors.New("log database is not initialized")
+	}
+	if callback == nil {
+		return errors.New("dimension backfill log callback is nil")
+	}
+	if startTs >= endTs {
+		return nil
+	}
+
+	var logs []Log
+	return LOG_DB.Model(&Log{}).
+		Select("id", "user_id", "created_at", "type", "username", "token_name", "prompt_tokens", "channel_id", "channel_name", "token_id", "request_id", "other").
+		Where("created_at >= ? AND created_at < ? AND type IN ?", startTs, endTs, []int{LogTypeConsume, LogTypeError}).
+		Order("id ASC").
+		FindInBatches(&logs, perfDimensionBackfillBatchSize, func(_ *gorm.DB, _ int) error {
+			return callback(logs)
+		}).Error
+}
+
 // don't use iota, avoid change log type value
 const (
 	LogTypeUnknown = 0

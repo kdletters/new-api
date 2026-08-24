@@ -62,7 +62,6 @@ import {
 } from '../../hooks/use-status-data'
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
-import { DimensionPerformancePanel } from './dimension-performance-panel'
 import { FAQPanel } from './faq-panel'
 import { PerformanceHealthPanel } from './performance-health-panel'
 import { SummaryCards } from './summary-cards'
@@ -770,14 +769,9 @@ export function OverviewDashboard() {
               )}
             >
               {isAdmin && (
-                <>
-                  <CardStaggerItem className='lg:col-span-2'>
-                    <PerformanceHealthPanel />
-                  </CardStaggerItem>
-                  <CardStaggerItem className='lg:col-span-2'>
-                    <DimensionPerformancePanel />
-                  </CardStaggerItem>
-                </>
+                <CardStaggerItem className='lg:col-span-2'>
+                  <PerformanceHealthPanel />
+                </CardStaggerItem>
               )}
               {showApiInfoPanel && (
                 <CardStaggerItem>
