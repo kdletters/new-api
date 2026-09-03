@@ -55,11 +55,24 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if types.IsSkipRetryError(err) {
 		return false
 	}
+	// Codex can report exhausted subscription windows as an application-level
+	// error (sometimes over HTTP 200), so the HTTP status is not sufficient.
+	// Match the stable upstream error codes without treating ordinary 429 rate
+	// limits as a reason to disable a channel.
+	errorCode := strings.ToLower(string(err.GetErrorCode()))
+	if errorCode == "insufficient_quota" ||
+		strings.Contains(errorCode, "usage_limit") ||
+		strings.Contains(errorCode, "credits_depleted") {
+		return true
+	}
 	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
 		return true
 	}
 
 	lowerMessage := strings.ToLower(err.Error())
+	if strings.Contains(lowerMessage, "usage limit") || strings.Contains(lowerMessage, "credits depleted") {
+		return true
+	}
 	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
 	return search
 }

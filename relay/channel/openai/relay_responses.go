@@ -30,7 +30,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && (oaiError.Type != "" || oaiError.Message != "" || oaiError.Code != nil) {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
@@ -84,6 +84,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
+	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -93,6 +94,21 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		// Codex may establish a successful HTTP stream and report an exhausted
+		// subscription window in response.error on a response.completed/failed
+		// event. Preserve that upstream error so the relay can retry/auto-disable
+		// the channel instead of settling the request as successful.
+		if streamResponse.Response != nil {
+			if oaiErr := streamResponse.Response.GetOpenAIError(); oaiErr != nil && (oaiErr.Type != "" || oaiErr.Message != "" || oaiErr.Code != nil) {
+				statusCode := resp.StatusCode
+				if statusCode < http.StatusBadRequest {
+					statusCode = http.StatusInternalServerError
+				}
+				streamErr = types.WithOpenAIError(*oaiErr, statusCode)
+				sr.Stop(streamErr)
+				return
+			}
 		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
@@ -157,6 +173,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
