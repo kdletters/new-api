@@ -333,6 +333,8 @@ func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
 		case *OAuthRegistrationDisabledError:
 			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+		case *OAuthInviteOnlyRegistrationError:
+			common.ApiErrorI18n(c, i18n.MsgUserInviteOnlyRegistration)
 		case *OAuthEmailAlreadyTakenError:
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 		case *OAuthLegacyBindingNotConfirmedError:
@@ -489,6 +491,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if !common.RegisterEnabled {
 		return nil, nil, &OAuthRegistrationDisabledError{}
 	}
+	if common.InviteOnlyRegistrationEnabled {
+		return nil, nil, &OAuthInviteOnlyRegistrationError{}
+	}
 
 	// Set up new user
 	user.Username = provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
@@ -609,6 +614,12 @@ type OAuthRegistrationDisabledError struct{}
 
 func (e *OAuthRegistrationDisabledError) Error() string {
 	return "registration is disabled"
+}
+
+type OAuthInviteOnlyRegistrationError struct{}
+
+func (e *OAuthInviteOnlyRegistrationError) Error() string {
+	return "registration is invite-only"
 }
 
 type OAuthEmailAlreadyTakenError struct{}

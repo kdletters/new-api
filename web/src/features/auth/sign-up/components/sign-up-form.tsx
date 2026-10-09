@@ -95,10 +95,15 @@ export function SignUpForm({
       email: '',
       password: '',
       confirmPassword: '',
+      aff_code: getAffiliateCode() ?? '',
     },
   })
 
   const emailValue = form.watch('email')
+  const inviteOnlyRegistration =
+    status?.invite_only_registration_enabled ??
+    status?.data?.invite_only_registration_enabled ??
+    false
   const emailVerificationRequired = !!status?.email_verification
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
@@ -157,6 +162,11 @@ export function SignUpForm({
       }
     }
 
+    if (inviteOnlyRegistration && !data.aff_code?.trim()) {
+      form.setError('aff_code', { message: t('Please enter an invite code') })
+      return
+    }
+
     if (!validateTurnstile()) return
 
     setIsLoading(true)
@@ -166,7 +176,7 @@ export function SignUpForm({
         password: data.password,
         email: data.email || undefined,
         verification_code: verificationCode || undefined,
-        aff_code: getAffiliateCode(),
+        aff_code: data.aff_code?.trim() || getAffiliateCode(),
         turnstile: turnstileToken,
       })
 
@@ -265,6 +275,28 @@ export function SignUpForm({
             </FormItem>
           )}
         />
+
+        {inviteOnlyRegistration && (
+          <FormField
+            control={form.control}
+            name='aff_code'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Invite Code')}</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder={t(
+                      'Enter the invite code from the user who invited you'
+                    )}
+                    autoComplete='off'
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
 
         {/* Password Field */}
         <FormField
