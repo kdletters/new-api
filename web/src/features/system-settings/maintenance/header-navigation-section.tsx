@@ -17,11 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
+import { MultiSelect } from '@/components/multi-select'
 import {
   Form,
   FormControl,
@@ -31,6 +33,8 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
+import { getGroups } from '@/features/users/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import {
   SettingsControlChildren,
@@ -53,8 +57,10 @@ const headerNavSchema = z.object({
   console: z.boolean(),
   pricingEnabled: z.boolean(),
   pricingRequireAuth: z.boolean(),
+  pricingGroups: z.array(z.string()),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
+  rankingsGroups: z.array(z.string()),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -81,6 +87,7 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.pricing?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.pricing.requireAuth
       : Boolean(config.pricing.requireAuth),
+  pricingGroups: config.pricing?.groups ?? [],
   rankingsEnabled:
     config.rankings?.enabled === undefined
       ? HEADER_NAV_DEFAULT.rankings.enabled
@@ -89,6 +96,7 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.rankings?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.rankings.requireAuth
       : Boolean(config.rankings.requireAuth),
+  rankingsGroups: config.rankings?.groups ?? [],
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -104,6 +112,19 @@ export function HeaderNavigationSection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const formDefaults = useMemo(() => toFormValues(config), [config])
+
+  const { data: groupsResponse } = useQuery({
+    queryKey: ['groups'],
+    queryFn: async () => requireServerSuccess(await getGroups()),
+  })
+  const groupOptions = useMemo(
+    () =>
+      (groupsResponse?.data ?? []).map((group) => ({
+        value: group,
+        label: group,
+      })),
+    [groupsResponse]
+  )
 
   const form = useForm<HeaderNavFormValues>({
     resolver: zodResolver(headerNavSchema),
@@ -125,11 +146,13 @@ export function HeaderNavigationSection({
         ...(config.pricing ?? HEADER_NAV_DEFAULT.pricing),
         enabled: values.pricingEnabled,
         requireAuth: values.pricingRequireAuth,
+        groups: values.pricingGroups,
       },
       rankings: {
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
+        groups: values.rankingsGroups,
       },
     }
 
@@ -149,7 +172,7 @@ export function HeaderNavigationSection({
   }
 
   const simpleModules: Array<{
-    key: keyof HeaderNavFormValues
+    key: 'home' | 'console' | 'docs' | 'about'
     title: string
     description: string
   }> = [
@@ -176,8 +199,9 @@ export function HeaderNavigationSection({
   ]
 
   const accessModules: Array<{
-    enabledKey: keyof HeaderNavFormValues
-    requireAuthKey: keyof HeaderNavFormValues
+    enabledKey: 'pricingEnabled' | 'rankingsEnabled'
+    requireAuthKey: 'pricingRequireAuth' | 'rankingsRequireAuth'
+    groupsKey: 'pricingGroups' | 'rankingsGroups'
     requireAuthDependsOn: 'pricingEnabled' | 'rankingsEnabled'
     title: string
     description: string
@@ -187,6 +211,7 @@ export function HeaderNavigationSection({
     {
       enabledKey: 'pricingEnabled',
       requireAuthKey: 'pricingRequireAuth',
+      groupsKey: 'pricingGroups',
       requireAuthDependsOn: 'pricingEnabled',
       title: t('Model Square'),
       description: t('Public model catalog and pricing page.'),
@@ -198,6 +223,7 @@ export function HeaderNavigationSection({
     {
       enabledKey: 'rankingsEnabled',
       requireAuthKey: 'rankingsRequireAuth',
+      groupsKey: 'rankingsGroups',
       requireAuthDependsOn: 'rankingsEnabled',
       title: t('Rankings'),
       description: t('Public rankings page based on live usage data.'),
@@ -267,11 +293,11 @@ export function HeaderNavigationSection({
                   )}
                 />
 
-                <FormField
-                  control={form.control}
-                  name={module.requireAuthKey}
-                  render={({ field }) => (
-                    <SettingsControlChildren>
+                <SettingsControlChildren>
+                  <FormField
+                    control={form.control}
+                    name={module.requireAuthKey}
+                    render={({ field }) => (
                       <SettingsSwitchItem className='py-2'>
                         <SettingsSwitchContent>
                           <FormLabel>{module.requireAuthTitle}</FormLabel>
@@ -288,9 +314,35 @@ export function HeaderNavigationSection({
                         </FormControl>
                         <FormMessage />
                       </SettingsSwitchItem>
-                    </SettingsControlChildren>
-                  )}
-                />
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name={module.groupsKey}
+                    render={({ field }) => (
+                      <SettingsSwitchItem className='flex-col items-stretch gap-2 py-2'>
+                        <SettingsSwitchContent>
+                          <FormLabel>{t('Visible to groups')}</FormLabel>
+                          <FormDescription>
+                            {t(
+                              'Only users in the selected groups can view this module. Leave empty to allow everyone.'
+                            )}
+                          </FormDescription>
+                        </SettingsSwitchContent>
+                        <FormControl>
+                          <MultiSelect
+                            options={groupOptions}
+                            selected={field.value}
+                            onChange={field.onChange}
+                            placeholder={t('All users')}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </SettingsSwitchItem>
+                    )}
+                  />
+                </SettingsControlChildren>
               </SettingsControlGroup>
             ))}
           </div>

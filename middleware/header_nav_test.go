@@ -40,14 +40,29 @@ func withHeaderNavModules(t *testing.T, raw string) {
 func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticated bool) *httptest.ResponseRecorder {
 	t.Helper()
 
+	if !authenticated {
+		return performHeaderNavRequestWithGroup(t, handler, "")
+	}
+	return performHeaderNavRequestWithGroup(t, handler, "default")
+}
+
+// performHeaderNavRequestWithGroup authenticates as a user of the given account
+// group; an empty group sends an anonymous request. Extra handlers are
+// registered between the module gate and the test handler, mirroring the route
+// wiring that adds HeaderNavGroupAuth behind HeaderNavModuleAuth.
+func performHeaderNavRequestWithGroup(t *testing.T, handler gin.HandlerFunc, group string, extra ...gin.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/test", handler, func(c *gin.Context) {
+	handlers := append([]gin.HandlerFunc{handler}, extra...)
+	handlers = append(handlers, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
+	router.GET("/api/test", handlers...)
 
 	var accessToken string
-	if authenticated {
+	if group != "" {
 		previousDB, previousRedis := model.DB, common.RedisEnabled
 		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 		require.NoError(t, err)
@@ -65,7 +80,7 @@ func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticate
 			Password:    "unused-password-hash",
 			Role:        common.RoleCommonUser,
 			Status:      common.UserStatusEnabled,
-			Group:       "default",
+			Group:       group,
 			AuthVersion: 1,
 		}
 		user.SetAccessToken(accessToken)
@@ -74,7 +89,7 @@ func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticate
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	if authenticated {
+	if group != "" {
 		request.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 	router.ServeHTTP(recorder, request)
@@ -188,4 +203,75 @@ func TestHeaderNavPublicRouteRejectsExpiredInternalAccessToken(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, response.Code)
 	require.Contains(t, response.Body.String(), "AUTH_TOKEN_EXPIRED")
+}
+
+func TestHeaderNavModuleAuthEnforcesVisibleGroups(t *testing.T) {
+	raw := `{"pricing":{"enabled":true,"requireAuth":false,"groups":["公司内部","vip"]}}`
+	withHeaderNavModules(t, raw)
+
+	allowed := performHeaderNavRequestWithGroup(t, HeaderNavModuleAuth("pricing"), "公司内部", HeaderNavGroupAuth("pricing"))
+	require.Equal(t, http.StatusOK, allowed.Code)
+
+	denied := performHeaderNavRequestWithGroup(t, HeaderNavModuleAuth("pricing"), "default", HeaderNavGroupAuth("pricing"))
+	require.Equal(t, http.StatusForbidden, denied.Code)
+
+	anonymous := performHeaderNavRequestWithGroup(t, HeaderNavModuleAuth("pricing"), "", HeaderNavGroupAuth("pricing"))
+	require.Equal(t, http.StatusUnauthorized, anonymous.Code)
+}
+
+func TestHeaderNavModuleAuthAcceptsCommaSeparatedVisibleGroups(t *testing.T) {
+	raw := `{"rankings":{"enabled":true,"groups":"vip, 公司内部"}}`
+	withHeaderNavModules(t, raw)
+
+	recorder := performHeaderNavRequestWithGroup(t, HeaderNavModuleAuth("rankings"), "vip", HeaderNavGroupAuth("rankings"))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthWithoutGroupsStaysPublic(t *testing.T) {
+	raw := `{"pricing":{"enabled":true,"requireAuth":false},"rankings":{"enabled":true,"groups":[]}}`
+	withHeaderNavModules(t, raw)
+
+	require.Equal(t, http.StatusOK, performHeaderNavRequestWithGroup(t, HeaderNavModuleAuth("pricing"), "").Code)
+	require.Equal(t, http.StatusOK, performHeaderNavRequestWithGroup(t, HeaderNavModuleAuth("rankings"), "").Code)
+}
+
+func TestVisibleHeaderNavModulesHidesRestrictedModules(t *testing.T) {
+	raw := `{"home":false,"pricing":{"enabled":true,"requireAuth":true,"groups":["vip"]},"rankings":{"enabled":true,"requireAuth":false}}`
+	withHeaderNavModules(t, raw)
+
+	moduleEnabled := func(t *testing.T, group string) map[string]bool {
+		t.Helper()
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		if group != "" {
+			c.Set("group", group)
+		}
+		var parsed map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(VisibleHeaderNavModules(c), &parsed))
+		result := make(map[string]bool, len(parsed))
+		for module, value := range parsed {
+			access, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			enabled, ok := access["enabled"].(bool)
+			require.True(t, ok)
+			result[module] = enabled
+		}
+		return result
+	}
+
+	anonymous := moduleEnabled(t, "")
+	require.False(t, anonymous["pricing"])
+	require.True(t, anonymous["rankings"])
+
+	allowed := moduleEnabled(t, "vip")
+	require.True(t, allowed["pricing"])
+
+	denied := moduleEnabled(t, "default")
+	require.False(t, denied["pricing"])
+	require.True(t, denied["rankings"])
 }

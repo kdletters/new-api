@@ -109,7 +109,7 @@ func GetStatus(c *gin.Context) {
 		"faq_enabled":           cs.FAQEnabled,
 
 		// 模块管理配置
-		"HeaderNavModules":    common.OptionMap["HeaderNavModules"],
+		"HeaderNavModules":    middleware.VisibleHeaderNavModules(c),
 		"SidebarModulesAdmin": common.OptionMap["SidebarModulesAdmin"],
 
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,

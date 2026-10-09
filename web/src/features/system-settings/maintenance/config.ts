@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 export type HeaderNavAccessConfig = {
   enabled: boolean
   requireAuth: boolean
+  groups?: string[]
 }
 
 export type HeaderNavModulesConfig = {
@@ -96,6 +97,24 @@ const toBoolean = (value: unknown, fallback: boolean): boolean => {
   return fallback
 }
 
+const GROUP_SEPARATOR_PATTERN = /[,，\n]/
+
+const parseAccessGroups = (value: unknown): string[] | undefined => {
+  if (typeof value !== 'string' && !Array.isArray(value)) return undefined
+
+  const items =
+    typeof value === 'string' ? value.split(GROUP_SEPARATOR_PATTERN) : value
+  const groups = new Set<string>()
+  for (const item of items) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (trimmed) groups.add(trimmed)
+  }
+
+  if (groups.size === 0) return undefined
+  return [...groups]
+}
+
 const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
@@ -118,10 +137,15 @@ const parseAccessModule = (
   }
   if (raw && typeof raw === 'object') {
     const record = raw as Record<string, unknown>
-    return {
+    const access: HeaderNavAccessConfig = {
       enabled: toBoolean(record.enabled, fallback.enabled),
       requireAuth: toBoolean(record.requireAuth, fallback.requireAuth),
     }
+    const groups = parseAccessGroups(record.groups)
+    if (groups) {
+      access.groups = groups
+    }
+    return access
   }
   return { ...fallback }
 }
@@ -179,7 +203,15 @@ export function parseHeaderNavModules(
 export function serializeHeaderNavModules(
   config: HeaderNavModulesConfig
 ): string {
-  return JSON.stringify(config)
+  const serialized: HeaderNavModulesConfig = { ...config }
+  for (const key of ['pricing', 'rankings'] as const) {
+    const module: HeaderNavAccessConfig = { ...config[key] }
+    if (!module.groups || module.groups.length === 0) {
+      delete module.groups
+    }
+    serialized[key] = module
+  }
+  return JSON.stringify(serialized)
 }
 
 export function parseSidebarModulesAdmin(
