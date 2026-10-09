@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
-import { type Table } from '@tanstack/react-table'
-import { Power, PowerOff, Tag, Trash2 } from 'lucide-react'
+import type { Table } from '@tanstack/react-table'
+import { Power, PowerOff, Tag, Trash2, Users } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -47,6 +47,7 @@ import {
   handleBatchSetTag,
 } from '../lib'
 import type { Channel } from '../types'
+import { ChannelGroupBatchDialog } from './dialogs/channel-group-batch-dialog'
 
 interface DataTableBulkActionsProps<TData> {
   table: Table<TData>
@@ -58,6 +59,7 @@ export function DataTableBulkActions<TData>({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showTagDialog, setShowTagDialog] = useState(false)
+  const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [tagValue, setTagValue] = useState('')
   const currentUser = useAuthStore((s) => s.auth.user)
@@ -178,6 +180,29 @@ export function DataTableBulkActions<TData>({
           <TooltipTrigger
             render={
               <Button
+                variant='outline'
+                size='icon'
+                onClick={() => setShowGroupDialog(true)}
+                className='size-8'
+                aria-label={t('Set group for selected channels')}
+                title={t('Set group for selected channels')}
+              />
+            }
+          >
+            <Users />
+            <span className='sr-only'>
+              {t('Set group for selected channels')}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Set group for selected channels')}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
                 variant='destructive'
                 size='icon'
                 onClick={() => {
@@ -210,6 +235,13 @@ export function DataTableBulkActions<TData>({
           </TooltipContent>
         </Tooltip>
       </BulkActionsToolbar>
+
+      <ChannelGroupBatchDialog
+        open={showGroupDialog}
+        onOpenChange={setShowGroupDialog}
+        channelIds={selectedIds}
+        onSuccess={handleClearSelection}
+      />
 
       {/* Set Tag Dialog */}
       <Dialog

@@ -339,6 +339,11 @@ export interface BatchSetTagParams {
   tag: string | null
 }
 
+export interface BatchSetGroupParams {
+  ids: number[]
+  group: string
+}
+
 export interface TagOperationParams {
   tag: string
   new_tag?: string

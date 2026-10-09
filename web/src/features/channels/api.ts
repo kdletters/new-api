@@ -24,6 +24,7 @@ import type { InferenceStatus } from './lib/inference-status'
 import type {
   AddChannelRequest,
   BatchDeleteParams,
+  BatchSetGroupParams,
   BatchSetTagParams,
   Channel,
   ChannelBalanceResponse,
@@ -248,6 +249,17 @@ export async function batchSetChannelTag(
 ): Promise<{ success: boolean; message?: string; data?: number }> {
   const res = await api.post(
     '/api/channel/batch/tag',
+    data,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function batchSetChannelGroup(
+  data: BatchSetGroupParams
+): Promise<{ success: boolean; message?: string; data?: number }> {
+  const res = await api.post(
+    '/api/channel/batch/group',
     data,
     channelActionConfig()
   )

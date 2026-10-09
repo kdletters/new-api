@@ -1069,8 +1069,9 @@ func EditTagChannels(c *gin.Context) {
 }
 
 type ChannelBatch struct {
-	Ids []int   `json:"ids"`
-	Tag *string `json:"tag"`
+	Ids   []int   `json:"ids"`
+	Tag   *string `json:"tag"`
+	Group *string `json:"group"`
 }
 
 func DeleteChannelBatch(c *gin.Context) {
@@ -1600,6 +1601,34 @@ func BatchSetChannelTag(c *gin.Context) {
 		"data":    len(channelBatch.Ids),
 	})
 	return
+}
+
+func BatchSetChannelGroup(c *gin.Context) {
+	channelBatch := ChannelBatch{}
+	err := c.ShouldBindJSON(&channelBatch)
+	if err != nil || len(channelBatch.Ids) == 0 || channelBatch.Group == nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	group := strings.TrimSpace(*channelBatch.Group)
+	if group == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	err = model.BatchSetChannelGroup(channelBatch.Ids, group)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "channel.group_batch_set", map[string]any{
+		"count": len(channelBatch.Ids),
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    len(channelBatch.Ids),
+	})
 }
 
 func GetTagModels(c *gin.Context) {

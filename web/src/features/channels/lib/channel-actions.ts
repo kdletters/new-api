@@ -30,6 +30,7 @@ import {
   updateChannelStatus,
   batchUpdateChannelStatus,
   batchDeleteChannels,
+  batchSetChannelGroup,
   batchSetChannelTag,
   enableTagChannels,
   disableTagChannels,
@@ -217,8 +218,7 @@ export async function handleUpdateChannelField(
       const fieldLabel =
         fieldName === 'channel_ratio'
           ? i18next.t('Channel Ratio')
-          : fieldName.charAt(0).toUpperCase() +
-            fieldName.slice(1).toLowerCase()
+          : fieldName.charAt(0).toUpperCase() + fieldName.slice(1).toLowerCase()
       toast.success(
         i18next.t('{{field}} updated to {{value}}', {
           field: fieldLabel,
@@ -509,6 +509,31 @@ export async function handleBatchSetTag(
     }
   } catch (error) {
     handleServerError(error, i18next.t('Failed to set tag'))
+  }
+}
+
+export async function handleBatchSetGroup(
+  ids: number[],
+  group: string,
+  queryClient?: QueryClient,
+  onSuccess?: () => void
+): Promise<void> {
+  if (ids.length === 0) {
+    toast.error(i18next.t('No channels selected'))
+    return
+  }
+
+  try {
+    const response = await batchSetChannelGroup({ ids, group })
+    if (response.success) {
+      toast.success(i18next.t(SUCCESS_MESSAGES.GROUP_SET))
+      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      onSuccess?.()
+    } else {
+      handleServerError(response, i18next.t('Failed to set group'))
+    }
+  } catch (error) {
+    handleServerError(error, i18next.t('Failed to set group'))
   }
 }
 

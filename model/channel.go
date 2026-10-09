@@ -1161,6 +1161,39 @@ func BatchSetChannelTag(ids []int, tag *string) error {
 	return tx.Commit().Error
 }
 
+func BatchSetChannelGroup(ids []int, group string) error {
+	// 开启事务
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	// 更新分组
+	err := tx.Model(&Channel{}).Where("id in (?)", ids).Update("group", group).Error
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	// Read the updated rows inside the same transaction so the ability refresh
+	// never observes a stale or concurrently changed channel.
+	var channels []*Channel
+	if err := tx.Where("id in (?)", ids).Find(&channels).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	for _, channel := range channels {
+		if err := channel.UpdateAbilities(tx); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	// 提交事务
+	return tx.Commit().Error
+}
+
 // CountAllChannels returns total channels in DB
 func CountAllChannels() (int64, error) {
 	var total int64
