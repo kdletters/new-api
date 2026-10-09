@@ -215,7 +215,10 @@ export async function handleUpdateChannelField(
     if (response.success) {
       // Show success toast with field name
       const fieldLabel =
-        fieldName.charAt(0).toUpperCase() + fieldName.slice(1).toLowerCase()
+        fieldName === 'channel_ratio'
+          ? i18next.t('Channel Ratio')
+          : fieldName.charAt(0).toUpperCase() +
+            fieldName.slice(1).toLowerCase()
       toast.success(
         i18next.t('{{field}} updated to {{value}}', {
           field: fieldLabel,

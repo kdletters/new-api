@@ -47,9 +47,12 @@ type Channel struct {
 	OtherInfo         string  `json:"other_info"`
 	Tag               *string `json:"tag" gorm:"index"`
 	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	// ChannelRatio mirrors setting.channel_ratio for list APIs and inline
+	// editing. It is derived from Setting and never persisted on its own.
+	ChannelRatio   *float64 `json:"channel_ratio,omitempty" gorm:"-"`
+	ParamOverride  *string  `json:"param_override" gorm:"type:text"`
+	HeaderOverride *string  `json:"header_override" gorm:"type:text"`
+	Remark         *string  `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 
@@ -1060,6 +1063,16 @@ func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
 
 func (channel *Channel) GetRPM() int {
 	return channel.GetSetting().RPM
+}
+
+// SyncChannelRatio exposes the setting-backed price multiplier on the channel
+// representation returned to management clients.
+func (channel *Channel) SyncChannelRatio() {
+	if channel == nil {
+		return
+	}
+	ratio := channel.GetSetting().EffectiveChannelRatio()
+	channel.ChannelRatio = &ratio
 }
 
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {

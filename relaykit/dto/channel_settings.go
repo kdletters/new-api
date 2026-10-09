@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -35,6 +36,10 @@ type ChannelSettings struct {
 	// RPM limits how many requests may be sent to this channel per minute.
 	// Zero means unlimited.
 	RPM int `json:"rpm,omitempty"`
+	// ChannelRatio multiplies the model price and group ratio for requests
+	// served by this channel, so upstream relays with different costs can be
+	// priced without splitting users into groups. Zero means unset (ratio 1).
+	ChannelRatio float64 `json:"channel_ratio,omitempty"`
 }
 
 // BindsTaskPlugin reports whether the channel is bound to the task plugin,
@@ -66,7 +71,33 @@ const (
 	HTTPProtocolAuto         = "auto"
 	HTTPProtocolHTTP1        = "http1"
 	MaxHTTP2ConnectionShards = 8
+	// MaxChannelRatio bounds the per-channel price multiplier so a typo cannot
+	// produce an absurd charge.
+	MaxChannelRatio = 1000
 )
+
+// EffectiveChannelRatio returns the multiplier applied to a request's price.
+// An unset (zero) value means 1 so existing channels keep their current price.
+func (s ChannelSettings) EffectiveChannelRatio() float64 {
+	if math.IsNaN(s.ChannelRatio) || math.IsInf(s.ChannelRatio, 0) || s.ChannelRatio <= 0 {
+		return 1
+	}
+	return s.ChannelRatio
+}
+
+// ValidateChannelRatio rejects multipliers that cannot be billed safely.
+func (s ChannelSettings) ValidateChannelRatio() error {
+	if s.ChannelRatio == 0 {
+		return nil
+	}
+	if math.IsNaN(s.ChannelRatio) || math.IsInf(s.ChannelRatio, 0) || s.ChannelRatio <= 0 {
+		return fmt.Errorf("channel ratio must be a positive number")
+	}
+	if s.ChannelRatio > MaxChannelRatio {
+		return fmt.Errorf("channel ratio must not exceed %d", MaxChannelRatio)
+	}
+	return nil
+}
 
 // ValidateHTTPTransport validates save-time HTTP transport channel settings.
 func (s *ChannelSettings) ValidateHTTPTransport() error {

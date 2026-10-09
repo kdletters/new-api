@@ -209,6 +209,12 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			Description: err.Error(),
 		}
 	}
+	if apiErr := service.ApplyChannelRatio(c, info, service.ChannelRatioFromContext(c)); apiErr != nil {
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: apiErr.Error(),
+		}
+	}
 
 	userQuota, err := model.GetUserQuota(info.UserId, false)
 	if err != nil {
@@ -526,6 +532,12 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: err.Error(),
+		}
+	}
+	if apiErr := service.ApplyChannelRatio(c, relayInfo, service.ChannelRatioFromContext(c)); apiErr != nil {
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: apiErr.Error(),
 		}
 	}
 

@@ -136,7 +136,11 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 }
 
-func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.BillingSnapshot, error) {
+// RefreshTieredBillingSnapshot recomputes the group-dependent fields of a
+// frozen tiered snapshot from the effective group ratio, so a channel ratio
+// applied after channel selection is reflected in the estimate. It is a no-op
+// for requests that do not use expression billing.
+func RefreshTieredBillingSnapshot(relayInfo *relaycommon.RelayInfo) (*billingexpr.BillingSnapshot, error) {
 	if relayInfo == nil {
 		return nil, nil
 	}
@@ -165,7 +169,7 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 // estimate before sending. If the initial group was free and skipped
 // pre-consume, switching to a paid group creates the session at that point.
 func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
-	snap, err := refreshTieredBillingGroup(relayInfo)
+	snap, err := RefreshTieredBillingSnapshot(relayInfo)
 	if err != nil {
 		return types.NewErrorWithStatusCode(
 			err,

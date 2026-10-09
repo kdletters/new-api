@@ -72,6 +72,7 @@ func clearChannelInfo(channel *model.Channel) {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
 		channel.ChannelInfo.MultiKeyDisabledTime = nil
 	}
+	channel.SyncChannelRatio()
 }
 
 func channelIDsFromChannels(channels []*model.Channel) []int {
@@ -551,6 +552,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
+	}
+	if err := channel.GetSetting().ValidateChannelRatio(); err != nil {
+		return fmt.Errorf("渠道倍率[channel ratio] 格式错误：%s", err.Error())
 	}
 	if channel.Type == constant.ChannelTypeTaskPlugin {
 		pluginKey := strings.TrimSpace(channel.GetSetting().TaskPluginKey)
@@ -1115,6 +1119,31 @@ type ChannelStatusBatchRequest struct {
 	Status int   `json:"status"`
 }
 
+// applyChannelRatioUpdate merges an inline channel-ratio edit into the channel's
+// setting JSON. The ratio is stored inside Setting, so only requests that carry
+// the dedicated field touch it; a full setting payload keeps whatever value it
+// already contains.
+func applyChannelRatioUpdate(channel *model.Channel, originChannel *model.Channel, requestData map[string]any) error {
+	raw, ratioProvided := requestData["channel_ratio"]
+	if !ratioProvided {
+		return nil
+	}
+	ratio, ok := raw.(float64)
+	if !ok {
+		return errors.New("渠道倍率必须为数字")
+	}
+	settings := originChannel.GetSetting()
+	if _, settingProvided := requestData["setting"]; settingProvided {
+		settings = channel.GetSetting()
+	}
+	settings.ChannelRatio = ratio
+	if err := settings.ValidateChannelRatio(); err != nil {
+		return err
+	}
+	channel.SetSetting(settings)
+	return nil
+}
+
 func UpdateChannel(c *gin.Context) {
 	channel := PatchChannel{}
 	rawBody, err := c.GetRawData()
@@ -1168,6 +1197,10 @@ func UpdateChannel(c *gin.Context) {
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
 	_, settingProvided := requestData["setting"]
+	if err := applyChannelRatioUpdate(&channel.Channel, originChannel, requestData); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
 	if settingProvided {
 		newProxy, _ := service.NormalizeProxyURL(channel.GetSetting().Proxy)
 		normalizedOriginProxy, originProxyErr := service.NormalizeProxyURL(originProxy)
@@ -1291,6 +1324,9 @@ func UpdateChannel(c *gin.Context) {
 	}
 	// 记录变更的字段名（语言无关的字段标识），密钥仅记录"已更换"绝不记录内容。
 	changedFields := make([]string, 0)
+	if channel.GetSetting().ChannelRatio != originChannel.GetSetting().ChannelRatio {
+		changedFields = append(changedFields, "channel_ratio")
+	}
 	if channel.Models != originChannel.Models {
 		changedFields = append(changedFields, "models")
 	}

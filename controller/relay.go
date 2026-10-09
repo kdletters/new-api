@@ -350,6 +350,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		if channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting); ok {
 			channel.SetSetting(channelSetting)
 		}
+		if billingErr := service.ApplyChannelRatio(c, info, channel.GetSetting().EffectiveChannelRatio()); billingErr != nil {
+			return nil, billingErr
+		}
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil
 	}
@@ -367,6 +370,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
 	if newAPIError != nil {
 		return nil, newAPIError
+	}
+	if billingErr := service.ApplyChannelRatio(c, info, channel.GetSetting().EffectiveChannelRatio()); billingErr != nil {
+		return nil, billingErr
 	}
 	return channel, nil
 }
@@ -716,6 +722,7 @@ func executeTaskSubmissionWith(
 	task.PrivateData.BillingContext = &model.TaskBillingContext{
 		ModelPrice:      relayInfo.PriceData.ModelPrice,
 		GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+		ChannelRatio:    relayInfo.PriceData.GroupRatioInfo.ChannelRatio,
 		ModelRatio:      relayInfo.PriceData.ModelRatio,
 		OtherRatios:     relayInfo.PriceData.OtherRatios(),
 		OriginModelName: relayInfo.OriginModelName,

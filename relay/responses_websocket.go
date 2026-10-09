@@ -270,6 +270,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			return apiErr
 		}
 		billingPrepared = true
+		if apiErr = service.ApplyChannelRatio(c, info, service.ChannelRatioFromContext(c)); apiErr != nil {
+			return apiErr
+		}
 		var payload []byte
 		payload, apiErr = buildResponsesWSCreatePayload(c, info, create.Request, create.Generate, create.StreamID)
 		if apiErr != nil {
@@ -301,6 +304,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				if apiErr = service.PrepareTieredBillingForSelectedGroup(c, info); apiErr != nil {
 					return apiErr
 				}
+			}
+			if apiErr = service.ApplyChannelRatio(c, info, service.ChannelRatioFromContext(c)); apiErr != nil {
+				return apiErr
 			}
 			info.RetryIndex = retry.GetRetry()
 			policy.BeginAttempt(channel, info.UsingGroup)

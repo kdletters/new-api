@@ -50,6 +50,11 @@ import { DimensionMetricsCell } from '@/features/performance-metrics/components/
 import type { PerformanceDimensionItem } from '@/features/performance-metrics/types'
 import { toIntlLocale } from '@/i18n/languages'
 import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import {
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyLabel,
@@ -58,6 +63,7 @@ import { formatTimestampToDate } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 import { createServerError } from '@/lib/server-error-message'
 import { truncateText } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getCodexUsage, updateChannelBalance } from '../api'
 import {
@@ -266,6 +272,49 @@ function ChannelFieldCell({
       onChange={fieldUpdateScheduler.schedule}
       onCommit={fieldUpdateScheduler.flush}
       min={min}
+    />
+  )
+}
+
+/**
+ * Channel ratio cell component with inline editing
+ */
+function ChannelRatioCell({ channel }: { channel: Channel }) {
+  const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.auth.user)
+  const canEditSensitive = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
+  const fieldUpdateScheduler = useMemo(
+    () =>
+      createChannelFieldUpdateScheduler((nextValue) => {
+        void handleUpdateChannelField(
+          channel.id,
+          'channel_ratio',
+          nextValue,
+          queryClient
+        )
+      }),
+    [channel.id, queryClient]
+  )
+
+  useEffect(() => () => fieldUpdateScheduler.flush(), [fieldUpdateScheduler])
+
+  if (isTagAggregateRow(channel)) {
+    return <span className='text-muted-foreground text-xs'>-</span>
+  }
+
+  return (
+    <NumericSpinnerInput
+      value={channel.channel_ratio ?? 1}
+      onChange={fieldUpdateScheduler.schedule}
+      onCommit={fieldUpdateScheduler.flush}
+      min={0.01}
+      max={1000}
+      step={0.05}
+      disabled={!canEditSensitive}
     />
   )
 }
@@ -1169,6 +1218,16 @@ export function useChannelsColumns(
         meta: { mobileHidden: true },
         cell: ({ row }) => <WeightCell channel={row.original} />,
         size: 90,
+        enableSorting: false,
+      },
+
+      // Channel ratio column
+      {
+        accessorKey: 'channel_ratio',
+        header: t('Channel Ratio'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => <ChannelRatioCell channel={row.original} />,
+        size: 110,
         enableSorting: false,
       },
 

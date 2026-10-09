@@ -116,7 +116,8 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		return false
 	}
 
-	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	// A policy penalty follows the user's group, not the channel cost multiplier.
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupOnlyRatio()
 	feeQuota := calcViolationFeeQuota(settings.ViolationDeductionAmount, groupRatio)
 	if feeQuota <= 0 {
 		return false

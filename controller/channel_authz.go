@@ -24,6 +24,9 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 	if _, ok := requestData["setting"]; ok && !equalStringPtr(channel.Setting, origin.Setting) {
 		return true
 	}
+	if _, ok := requestData["channel_ratio"]; ok && channel.GetSetting().ChannelRatio != origin.GetSetting().ChannelRatio {
+		return true
+	}
 	if _, ok := requestData["other"]; ok && channel.Other != origin.Other {
 		return true
 	}
@@ -68,6 +71,7 @@ var channelSensitiveFields = map[string]struct{}{
 	"header_override":     {},
 	"param_override":      {},
 	"setting":             {},
+	"channel_ratio":       {},
 	"other":               {},
 	"settings":            {},
 	"key_mode":            {},

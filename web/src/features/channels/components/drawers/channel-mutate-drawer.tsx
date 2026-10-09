@@ -289,6 +289,7 @@ const SENSITIVE_FORM_FIELDS = [
   'header_override',
   'settings',
   'setting',
+  'channel_ratio',
   'advanced_custom',
   'is_enterprise_account',
   'vertex_key_type',
@@ -2212,6 +2213,31 @@ export function ChannelMutateDrawer({
                 />
               </FormControl>
               <FormDescription>{t(FIELD_DESCRIPTIONS.WEIGHT)}</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name='channel_ratio'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Channel Ratio')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  min={0.01}
+                  max={1000}
+                  step='any'
+                  placeholder='1'
+                  {...field}
+                  onChange={(e) => field.onChange(Number(e.target.value))}
+                />
+              </FormControl>
+              <FormDescription>
+                {t(FIELD_DESCRIPTIONS.CHANNEL_RATIO)}
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}

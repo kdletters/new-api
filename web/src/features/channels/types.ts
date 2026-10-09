@@ -60,6 +60,7 @@ export const channelSchema = z.object({
   other_info: z.string().default(''),
   tag: z.string().nullish(),
   setting: z.string().nullish(),
+  channel_ratio: z.number().nullish(),
   param_override: z.string().nullish(),
   header_override: z.string().nullish(),
   remark: z.string().default(''),
@@ -91,6 +92,7 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  channel_ratio?: number
 }
 
 export interface ChannelOtherSettings {

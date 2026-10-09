@@ -63,10 +63,18 @@ export function NumericSpinnerInput({
     return result
   }
 
+  // Fractional steps are used for ratio fields; keep their arithmetic from
+  // producing values like 1.3000000000000003.
+  const roundToStep = (value: number) => {
+    if (step >= 1) return value
+    const decimals = Math.min(6, (String(step).split('.')[1] ?? '').length)
+    return Number(value.toFixed(decimals))
+  }
+
   const handleIncrement = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (disabled) return
-    const next = clamp((Number(localValue) || 0) + step)
+    const next = clamp(roundToStep((Number(localValue) || 0) + step))
     setLocalValue(String(next))
     onChange(next)
   }
@@ -74,7 +82,7 @@ export function NumericSpinnerInput({
   const handleDecrement = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (disabled) return
-    const next = clamp((Number(localValue) || 0) - step)
+    const next = clamp(roundToStep((Number(localValue) || 0) - step))
     setLocalValue(String(next))
     onChange(next)
   }
@@ -91,7 +99,8 @@ export function NumericSpinnerInput({
       setLocalValue(raw)
       return
     }
-    if (!/^-?\d+$/.test(raw)) return
+    const numericPattern = step < 1 ? /^-?\d*\.?\d*$/ : /^-?\d+$/
+    if (!numericPattern.test(raw)) return
     setLocalValue(raw)
   }
 

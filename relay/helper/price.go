@@ -65,6 +65,10 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
 	}
 
+	// The selected channel's multiplier is folded in after channel selection so
+	// this stays the group-only base for repricing on retries.
+	groupRatioInfo.BaseGroupRatio = groupRatioInfo.GroupRatio
+	groupRatioInfo.ChannelRatio = 1
 	return groupRatioInfo
 }
 

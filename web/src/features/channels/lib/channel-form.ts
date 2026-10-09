@@ -222,6 +222,11 @@ export const channelFormSchema = z
       ),
     priority: z.number().optional(),
     weight: z.number().optional(),
+    channel_ratio: z
+      .number()
+      .positive('Channel ratio must be greater than 0')
+      .max(1000, 'Channel ratio must not exceed 1000')
+      .optional(),
     rpm: z.number().int().min(0, 'RPM limit must be 0 or greater').optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
@@ -440,6 +445,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   model_mapping: '',
   priority: 0,
   weight: 0,
+  channel_ratio: 1,
   rpm: 0,
   test_model: '',
   auto_ban: 1,
@@ -499,6 +505,7 @@ export function transformChannelToFormDefaults(
 ): ChannelFormValues {
   // Parse channel extra settings from setting field
   let extraSettings = {
+    channel_ratio: 1,
     rpm: 0,
     task_plugin_key: '',
     task_extend_plugin_keys: [] as string[],
@@ -521,6 +528,12 @@ export function transformChannelToFormDefaults(
         parsed.http2_connection_shards
       )
       extraSettings = {
+        channel_ratio:
+          typeof parsed.channel_ratio === 'number' &&
+          Number.isFinite(parsed.channel_ratio) &&
+          parsed.channel_ratio > 0
+            ? parsed.channel_ratio
+            : 1,
         rpm:
           typeof parsed.rpm === 'number' &&
           Number.isInteger(parsed.rpm) &&
@@ -653,6 +666,7 @@ export function transformChannelToFormDefaults(
  */
 export function buildSettingJSON(formData: ChannelFormValues): string {
   const settingObj: Record<string, unknown> = {
+    channel_ratio: formData.channel_ratio ?? 1,
     rpm: formData.rpm || 0,
     task_plugin_key:
       formData.type === CHANNEL_TYPE_TASK_PLUGIN

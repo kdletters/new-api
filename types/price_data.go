@@ -8,9 +8,48 @@ import (
 )
 
 type GroupRatioInfo struct {
+	// GroupRatio is the multiplier actually applied to the request price:
+	// the group ratio with the selected channel's ratio folded in.
 	GroupRatio        float64
 	GroupSpecialRatio float64
 	HasSpecialRatio   bool
+	// BaseGroupRatio is the group-only multiplier before any channel ratio is
+	// folded in. Zero on values built before the field existed.
+	BaseGroupRatio float64
+	// ChannelRatio is the selected channel's price multiplier. Zero means no
+	// channel ratio has been applied yet.
+	ChannelRatio float64
+}
+
+// ApplyChannelRatio folds a channel's price multiplier into the effective group
+// ratio. The effective value is always recomputed from the group-only base, so
+// retries that switch channels never multiply cumulatively.
+func (g *GroupRatioInfo) ApplyChannelRatio(ratio float64) {
+	if !isValidOtherRatio(ratio) {
+		ratio = 1
+	}
+	base := g.BaseGroupRatio
+	if g.ChannelRatio == 0 {
+		base = g.GroupRatio
+	}
+	g.BaseGroupRatio = base
+	g.ChannelRatio = ratio
+	g.GroupRatio = base * ratio
+}
+
+// GroupOnlyRatio returns the group multiplier without any channel ratio, for
+// charges such as policy penalties that must not scale with the selected
+// channel. Legacy values that carry no channel ratio keep their multiplier.
+func (g GroupRatioInfo) GroupOnlyRatio() float64 {
+	if g.ChannelRatio == 0 || g.BaseGroupRatio == 0 {
+		return g.GroupRatio
+	}
+	return g.BaseGroupRatio
+}
+
+// HasChannelRatio reports whether a non-neutral channel multiplier applies.
+func (g GroupRatioInfo) HasChannelRatio() bool {
+	return g.ChannelRatio != 0 && g.ChannelRatio != 1
 }
 
 type PriceData struct {

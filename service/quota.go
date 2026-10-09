@@ -119,6 +119,12 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if ok {
 		actualGroupRatio = userGroupRatio
 	}
+	// 渠道倍率：实时语音按实际选中渠道的价格结算
+	channelRatio := relayInfo.PriceData.GroupRatioInfo.ChannelRatio
+	if channelRatio <= 0 {
+		channelRatio = ChannelRatioFromContext(ctx)
+	}
+	actualGroupRatio *= channelRatio
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{

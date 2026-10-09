@@ -103,6 +103,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other := model.NewLogOther()
 	other.SetPublic("model_ratio", modelRatio)
 	other.SetPublic("group_ratio", groupRatio)
+	if relayInfo != nil && relayInfo.PriceData.GroupRatioInfo.HasChannelRatio() {
+		other.SetPublic("channel_ratio", relayInfo.PriceData.GroupRatioInfo.ChannelRatio)
+	}
 	other.SetPublic("completion_ratio", completionRatio)
 	other.SetPublic("cache_tokens", cacheTokens)
 	other.SetPublic("cache_ratio", cacheRatio)
@@ -324,6 +327,9 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	other.SetPublic("group_ratio", priceData.GroupRatioInfo.GroupRatio)
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
+	}
+	if priceData.GroupRatioInfo.HasChannelRatio() {
+		other.SetPublic("channel_ratio", priceData.GroupRatioInfo.ChannelRatio)
 	}
 	appendRequestPath(nil, relayInfo, other)
 	return other
