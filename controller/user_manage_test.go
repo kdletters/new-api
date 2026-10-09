@@ -641,3 +641,28 @@ func TestManageUserQuotaCacheUsesCommittedIntegerDifference(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteUserHardDeletesSoftDeletedAccount(t *testing.T) {
+	_, identity, target := setupAdminUserTest(t)
+	// Hard delete also purges per-user tokens and external identity claims.
+	require.NoError(t, model.DB.AutoMigrate(&model.Token{}, &model.ExternalIdentityClaim{}))
+	require.NoError(t, model.DB.Delete(&model.User{Id: target.Id}).Error)
+	_, err := model.GetUserById(target.Id, false)
+	require.Error(t, err, "soft-deleted accounts stay hidden from the regular lookup")
+
+	context, err := common.Marshal(service.AdminUserContext{UserID: target.Id})
+	require.NoError(t, err)
+	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{
+		Scope:   service.VerificationScopeAdminUserDelete,
+		Context: context,
+	}, service.VerificationMethodPassword)
+
+	response := adminUserRequest(http.MethodDelete, "/api/user/:id", "", proof, identity, common.RoleRootUser, gin.Params{{Key: "id", Value: fmt.Sprint(target.Id)}}, DeleteUser)
+	var result securityEnrollmentResponse
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+
+	var remaining int64
+	require.NoError(t, model.DB.Unscoped().Model(&model.User{}).Where("id = ?", target.Id).Count(&remaining).Error)
+	assert.Zero(t, remaining)
+}

@@ -540,6 +540,22 @@ func GetSelfUserById(id int) (*User, error) {
 	return &profile.User, err
 }
 
+// GetUserByIdUnscoped returns a user regardless of soft-delete state. It is
+// intended for administrative operations that must be able to act on
+// already-deleted accounts (for example, permanent deletion).
+func GetUserByIdUnscoped(id int, selectAll bool) (*User, error) {
+	if id == 0 {
+		return nil, errors.New("id 为空！")
+	}
+	user := User{Id: id}
+	query := DB.Unscoped()
+	if !selectAll {
+		query = query.Omit("password", "access_token")
+	}
+	err := query.First(&user, "id = ?", id).Error
+	return &user, err
+}
+
 func GetUserIdByAffCode(affCode string) (int, error) {
 	if affCode == "" {
 		return 0, errors.New("affCode 为空！")

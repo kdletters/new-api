@@ -928,7 +928,10 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	originUser, err := model.GetUserById(id, false)
+	// Administrative permanent deletion must also resolve users that have
+	// already been soft-deleted (注销). Keep the role check and audit metadata
+	// based on the resolved record before purging it.
+	originUser, err := model.GetUserByIdUnscoped(id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
