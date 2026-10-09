@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,11 +80,12 @@ func TestGetRandomSatisfiedChannelDeprioritizingTriesUnusedCandidate(t *testing.
 				InitChannelCache()
 			}
 
+			filters := []dto.ChannelFilter{{Kind: dto.FilterRequestPath, RequestPath: "/v1/chat/completions"}}
 			selected, err := GetRandomSatisfiedChannelDeprioritizing(
 				"default",
 				"rpm-test-model",
 				1,
-				"/v1/chat/completions",
+				filters,
 				map[int]struct{}{301: {}},
 			)
 			require.NoError(t, err)
@@ -94,7 +96,7 @@ func TestGetRandomSatisfiedChannelDeprioritizingTriesUnusedCandidate(t *testing.
 				"default",
 				"rpm-test-model",
 				0,
-				"/v1/chat/completions",
+				filters,
 				map[int]struct{}{301: {}, 302: {}},
 			)
 			require.NoError(t, err)
@@ -105,7 +107,7 @@ func TestGetRandomSatisfiedChannelDeprioritizingTriesUnusedCandidate(t *testing.
 				"default",
 				"rpm-test-model",
 				1,
-				"/v1/chat/completions",
+				filters,
 				map[int]struct{}{301: {}, 302: {}, 303: {}},
 			)
 			require.NoError(t, err)

@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,7 +156,7 @@ func TestRelayRetriesDeprioritizedChannelAfterUpstream429(t *testing.T) {
 		Id:       901,
 		Username: "retry-user",
 		Password: "password",
-		Quota:    common.GetTrustQuota() + int(common.QuotaPerUnit),
+		Quota:    int(operation_setting.GetQuotaSetting().TrustQuotaUSD*common.QuotaPerUnit) + int(common.QuotaPerUnit),
 		Group:    "default",
 		Status:   common.UserStatusEnabled,
 	}

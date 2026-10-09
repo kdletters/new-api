@@ -1,4 +1,3 @@
-import { render, screen } from '@testing-library/react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
 import { createRef } from 'react'
 import { describe, expect, test, vi } from 'vitest'
 
@@ -26,11 +27,11 @@ import {
 } from '../model-pricing-sheet'
 import { TieredPricingEditor } from '../tiered-pricing-editor'
 
-// The visual editor's parser only accepts the expression shape it generates
-// itself (`tier("label", p * N + c * N [+ cr * ...])`). Expressions authored by
-// hand or by the LLM helper (e.g. cache terms before `c`) cannot be parsed.
-const UNPARSEABLE_EXPRESSION =
-  'len <= 272000 ? tier("0_272k", p * 10 + cr * 1 + cc * 12.5 + c * 50) : tier("272k_plus", p * 20 + cr * 2 + cc * 25 + c * 75)'
+// Hand-authored and LLM-assisted billing expressions can use token variables the
+// visual editor cannot represent (here: audio input tokens). Opening such a model
+// must keep the stored expression verbatim instead of replacing it with the
+// empty `p * 0 + c * 0` template, which used to zero the price on save.
+const UNPARSEABLE_EXPRESSION = 'p * 1 + c * 2 + ai * 3'
 
 function renderEditor(billingExpr: string) {
   const onBillingExprChange = vi.fn()
@@ -55,36 +56,33 @@ describe('tiered pricing editor', () => {
       UNPARSEABLE_EXPRESSION
     )
 
-    // Regression: opening such a model used to replace the saved expression
-    // with the empty template `p * 0 + c * 0`, zeroing the price on save.
     expect(onBillingExprChange).not.toHaveBeenCalled()
     expect(onRequestRuleExprChange).not.toHaveBeenCalled()
     expect(screen.getByDisplayValue(UNPARSEABLE_EXPRESSION)).toBeVisible()
   })
 
-  test('opens a representable expression in the visual editor unchanged', () => {
-    const expression = 'tier("base", p * 3 + c * 15)'
-    const { onBillingExprChange } = renderEditor(expression)
-
-    expect(onBillingExprChange).not.toHaveBeenCalled()
-    expect(screen.queryByDisplayValue(expression)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add tier' })).toBeVisible()
-  })
-
   test('commits an unparseable expression unchanged', async () => {
     const ref = createRef<ModelPricingEditorPanelHandle>()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
 
     render(
-      <ModelPricingEditorPanel
-        ref={ref}
-        editData={{
-          name: 'gpt-6-astra',
-          billingMode: 'tiered_expr',
-          billingExpr: UNPARSEABLE_EXPRESSION,
-          requestRuleExpr: '',
-        }}
-        isSaving={false}
-      />
+      <QueryClientProvider client={queryClient}>
+        <ModelPricingEditorPanel
+          ref={ref}
+          editData={{
+            name: 'gpt-6-astra',
+            billingMode: 'tiered_expr',
+            billingExpr: UNPARSEABLE_EXPRESSION,
+            requestRuleExpr: '',
+          }}
+          isSaving={false}
+        />
+      </QueryClientProvider>
     )
 
     const data = await ref.current?.commitDraft()

@@ -15,6 +15,15 @@ func formatNotifyType(channelId int, status int) string {
 	return fmt.Sprintf("%s_%d_%d", dto.NotifyTypeChannelUpdate, channelId, status)
 }
 
+func shouldCloseActiveWebSocketsAfterDisable(channelId int) bool {
+	channel, err := model.GetChannelById(channelId, true)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to check channel status before closing active websockets: channel_id=%d, error=%v", channelId, err))
+		return true
+	}
+	return channel.Status != common.ChannelStatusEnabled
+}
+
 // disable & notify
 func DisableChannel(channelError types.ChannelError, reason string) {
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）发生错误，准备禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
@@ -27,6 +36,9 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 
 	success := model.UpdateChannelStatus(channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
 	if success {
+		if shouldCloseActiveWebSocketsAfterDisable(channelError.ChannelId) {
+			CloseActiveWebSocketsForChannel(channelError.ChannelId, ChannelDisabledCloseReason)
+		}
 		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
 		NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
@@ -59,10 +71,7 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	// error (sometimes over HTTP 200), so the HTTP status is not sufficient.
 	// Match the stable upstream error codes without treating ordinary 429 rate
 	// limits as a reason to disable a channel.
-	errorCode := strings.ToLower(string(err.GetErrorCode()))
-	if errorCode == "insufficient_quota" ||
-		strings.Contains(errorCode, "usage_limit") ||
-		strings.Contains(errorCode, "credits_depleted") {
+	if IsChannelExhaustionError(string(err.GetErrorCode()), err.Error()) {
 		return true
 	}
 	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
@@ -70,11 +79,30 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	}
 
 	lowerMessage := strings.ToLower(err.Error())
-	if strings.Contains(lowerMessage, "usage limit") || strings.Contains(lowerMessage, "credits depleted") {
-		return true
-	}
 	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
 	return search
+}
+
+// channelExhaustionMarkers are stable upstream signatures that mean the account
+// or subscription window is exhausted rather than the request being throttled.
+var channelExhaustionMarkers = []string{
+	"insufficient_quota",
+	"usage_limit",
+	"credits_depleted",
+}
+
+// IsChannelExhaustionError reports whether an upstream error code or message
+// marks an exhausted upstream window. Markers are compared against underscores
+// so that both "usage_limit_reached" and "usage limit" style messages match.
+func IsChannelExhaustionError(errorCode string, message string) bool {
+	normalized := strings.ToLower(errorCode + " " + message)
+	normalized = strings.NewReplacer(" ", "_", "-", "_").Replace(normalized)
+	for _, marker := range channelExhaustionMarkers {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
