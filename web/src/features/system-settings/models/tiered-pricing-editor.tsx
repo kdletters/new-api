@@ -1639,9 +1639,14 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
   onRequestRuleExprChange,
 }: TieredPricingEditorProps) {
   const { t } = useTranslation()
-  const [editorMode, setEditorMode] = useState<EditorMode>('visual')
   const [visualConfig, setVisualConfig] = useState<VisualConfig | null>(() =>
     tryParseVisualConfig(currentExpr)
+  )
+  // Expressions the visual editor cannot represent must open in expression mode
+  // from the first render. The sync effect below would otherwise emit the empty
+  // visual template (`p * 0 + c * 0`) and overwrite the saved expression.
+  const [editorMode, setEditorMode] = useState<EditorMode>(() =>
+    currentExpr && !visualConfig ? 'raw' : 'visual'
   )
   const [rawExpr, setRawExpr] = useState(() =>
     combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
@@ -1682,11 +1687,14 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
 
   const effectiveExpr = useMemo(() => {
     if (editorMode === 'visual') {
+      // Without a parsed config there is nothing to render visually yet; keep
+      // the incoming expression instead of generating the empty template.
+      if (!visualConfig) return currentExpr
       return generateExprFromVisualConfig(visualConfig)
     }
     const { billingExpr } = splitBillingExprAndRequestRules(rawExpr)
     return billingExpr
-  }, [editorMode, visualConfig, rawExpr])
+  }, [currentExpr, editorMode, visualConfig, rawExpr])
 
   useEffect(() => {
     if (effectiveExpr !== currentExpr) {
