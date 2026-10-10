@@ -252,3 +252,85 @@ func TestConvertGeminiRequestNilRequest(t *testing.T) {
 	_, err := (&Adaptor{}).ConvertGeminiRequest(nil, geminiToClaudeInfo(), nil)
 	require.Error(t, err)
 }
+
+func TestConvertClaudeRequestFlattensTopLevelToolSchemaUnions(t *testing.T) {
+	req := &dto.ClaudeRequest{
+		Model: "claude-opus-5-5",
+		Tools: []any{
+			map[string]any{
+				"name": "probe_tool",
+				"input_schema": map[string]any{
+					"type": "object",
+					"anyOf": []any{
+						map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"a": map[string]any{"type": "string"}},
+							"required":   []any{"a"},
+						},
+						map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"b": map[string]any{"type": "integer"}},
+							"required":   []any{"b"},
+						},
+					},
+				},
+			},
+		},
+		Messages: []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+	}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: req.Model,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: req.Model},
+	}
+
+	out, err := (&Adaptor{}).ConvertClaudeRequest(nil, info, req)
+	require.NoError(t, err)
+	encoded, err := common.Marshal(out)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "anyOf")
+	assert.Contains(t, string(encoded), `"a"`)
+	assert.Contains(t, string(encoded), `"b"`)
+
+	diagnostics := info.ConversionDiagnostics()
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "claude_tool_schema_union_flattened", diagnostics[0].Code)
+	assert.Equal(t, "tools[0].input_schema", diagnostics[0].Path)
+}
+
+func TestConvertOpenAIRequestFlattensTopLevelToolSchemaUnions(t *testing.T) {
+	req := &dto.GeneralOpenAIRequest{
+		Model:    "claude-opus-5-5",
+		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+		Tools: []dto.ToolCallRequest{{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name: "probe_tool",
+				Parameters: map[string]any{
+					"type": "object",
+					"oneOf": []any{
+						map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"a": map[string]any{"type": "string"}},
+						},
+						map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"b": map[string]any{"type": "integer"}},
+						},
+					},
+				},
+			},
+		}},
+	}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: req.Model,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: req.Model},
+	}
+
+	out, err := (&Adaptor{}).ConvertOpenAIRequest(nil, info, req)
+	require.NoError(t, err)
+	encoded, err := common.Marshal(out)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "oneOf")
+	assert.Contains(t, string(encoded), `"a"`)
+	assert.Contains(t, string(encoded), `"b"`)
+}

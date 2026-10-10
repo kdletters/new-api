@@ -366,6 +366,13 @@ func ClaudeUsesManualThinking(model string, intent Intent) bool {
 	return capabilities.supportsManual && intent.BudgetTokens != nil && intent.Mode != ModeAdaptive
 }
 
+// ClaudeRejectsDisabledThinking reports whether the named model cannot represent
+// the native thinking.type "disabled" (Anthropic model table: e.g. Claude Opus
+// 5.5 is always-on).
+func ClaudeRejectsDisabledThinking(model string) bool {
+	return !claudeCapabilitiesFor(model).supportsDisable
+}
+
 func IsKnownClaudeModel(model string) bool {
 	return isKnownClaudeModel(model)
 }

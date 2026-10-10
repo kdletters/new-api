@@ -3,6 +3,7 @@ package relayconvert
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
@@ -55,6 +56,137 @@ func ApplyClaudeThinkingModel(claudeRequest *dto.ClaudeRequest, info convmeta.Me
 		recorder.RecordConversionDiagnostics(ctx, collector.Diagnostics())
 	}
 	return err
+}
+
+// claudeToolInputSchema is one tool input schema found in a Claude request,
+// tagged with the tool type so hosted tools can be skipped without depending on
+// the concrete tool slice type.
+type claudeToolInputSchema struct {
+	name        string
+	typeName    string
+	inputSchema map[string]any
+}
+
+// NormalizeClaudeToolInputSchemas flattens top-level oneOf/anyOf/allOf unions
+// of every client function tool carried by a Claude Messages request. It
+// mutates the request in place and returns one warning diagnostic per changed
+// tool. Hosted tools such as web_search, tools without an input schema, and
+// non-object input schemas are left untouched.
+func NormalizeClaudeToolInputSchemas(req *dto.ClaudeRequest) []types.ConversionDiagnostic {
+	if req == nil {
+		return nil
+	}
+	var diagnostics []types.ConversionDiagnostic
+	for index, tool := range claudeRequestToolInputSchemas(req.Tools) {
+		schema := tool.inputSchema
+		if schema == nil || len(schema) == 0 {
+			continue
+		}
+		if strings.HasPrefix(tool.typeName, "web_search") {
+			continue
+		}
+		typeName, isString := schema["type"].(string)
+		if isString && !strings.EqualFold(strings.TrimSpace(typeName), "object") {
+			continue
+		}
+		if !sharedclaude.FlattenInputSchemaUnions(schema) {
+			continue
+		}
+		diagnostics = append(diagnostics, types.ConversionDiagnostic{
+			Code:     "claude_tool_schema_union_flattened",
+			Path:     fmt.Sprintf("tools[%d].input_schema", index),
+			Message:  fmt.Sprintf("tool %q input_schema used a top-level oneOf/anyOf/allOf union; flattened because Claude rejects top-level unions", tool.name),
+			Severity: types.ConversionDiagnosticWarning,
+		})
+	}
+	return diagnostics
+}
+
+func claudeRequestToolInputSchemas(tools any) []claudeToolInputSchema {
+	if tools == nil {
+		return nil
+	}
+	var entries []any
+	switch value := tools.(type) {
+	case []any:
+		entries = value
+	case []map[string]any:
+		for _, tool := range value {
+			if tool != nil {
+				entries = append(entries, tool)
+			}
+		}
+	case []*dto.Tool:
+		entries = make([]any, 0, len(value))
+		for _, tool := range value {
+			if tool != nil {
+				entries = append(entries, tool)
+			}
+		}
+	case []dto.Tool:
+		entries = make([]any, 0, len(value))
+		for i := range value {
+			entries = append(entries, &value[i])
+		}
+	case []*dto.ClaudeWebSearchTool:
+		entries = make([]any, 0, len(value))
+		for _, tool := range value {
+			if tool != nil {
+				entries = append(entries, tool)
+			}
+		}
+	case []dto.ClaudeWebSearchTool:
+		entries = make([]any, 0, len(value))
+		for i := range value {
+			entries = append(entries, &value[i])
+		}
+	default:
+		return nil
+	}
+
+	schemas := make([]claudeToolInputSchema, 0, len(entries))
+	for _, entry := range entries {
+		switch tool := entry.(type) {
+		case *dto.Tool:
+			if tool != nil {
+				schemas = append(schemas, claudeToolInputSchema{name: tool.Name, inputSchema: tool.InputSchema})
+			}
+		case dto.Tool:
+			schemas = append(schemas, claudeToolInputSchema{name: tool.Name, inputSchema: tool.InputSchema})
+		case *dto.ClaudeWebSearchTool:
+			if tool != nil {
+				schemas = append(schemas, claudeToolInputSchema{name: tool.Name, typeName: tool.Type})
+			}
+		case dto.ClaudeWebSearchTool:
+			schemas = append(schemas, claudeToolInputSchema{name: tool.Name, typeName: tool.Type})
+		case map[string]any:
+			name, _ := tool["name"].(string)
+			typeName, _ := tool["type"].(string)
+			schemas = append(schemas, claudeToolInputSchema{
+				name:        name,
+				typeName:    typeName,
+				inputSchema: stringKeyedMap(tool["input_schema"]),
+			})
+		}
+	}
+	return schemas
+}
+
+// stringKeyedMap defensively accepts the map types a JSON-decoded schema may
+// have; a nil result means "no object schema here".
+func stringKeyedMap(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case map[string]map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			out[key] = nested
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {

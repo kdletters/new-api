@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -29,7 +30,7 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	return result.Value, nil
+	return normalizeClaudeToolInputSchemas(c, info, result.Value), nil
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
@@ -49,7 +50,28 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	if info.UpstreamModelName == "" {
 		info.UpstreamModelName = request.Model
 	}
-	return request, nil
+	return normalizeClaudeToolInputSchemas(c, info, request), nil
+}
+
+// normalizeClaudeToolInputSchemas flattens tool input-schema unions that Claude
+// rejects at the top level ("input_schema does not support oneOf, allOf, or
+// anyOf at the top level"), which Bedrock-backed upstreams validate strictly.
+// The rewrite is lossy and reported through a conversion diagnostic.
+func normalizeClaudeToolInputSchemas(c *gin.Context, info *relaycommon.RelayInfo, value any) any {
+	request, ok := value.(*dto.ClaudeRequest)
+	if !ok || request == nil {
+		return value
+	}
+	diagnostics := relayconvert.NormalizeClaudeToolInputSchemas(request)
+	if len(diagnostics) == 0 || info == nil {
+		return request
+	}
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	info.RecordConversionDiagnostics(ctx, diagnostics)
+	return request
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -123,7 +145,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	return result.Value, nil
+	return normalizeClaudeToolInputSchemas(c, info, result.Value), nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
@@ -144,7 +166,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if !ok {
 		return nil, fmt.Errorf("expected Anthropic Messages request, got %T", result.Value)
 	}
-	return claudeRequest, nil
+	return normalizeClaudeToolInputSchemas(c, info, claudeRequest), nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

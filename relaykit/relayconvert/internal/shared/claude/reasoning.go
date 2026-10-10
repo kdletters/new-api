@@ -21,6 +21,9 @@ func ApplyReasoning(ctx context.Context, req *dto.ClaudeRequest, info convmeta.M
 	opts := convmeta.OptionsOf(info)
 	baseModel := req.Model
 	capabilityModel := baseModel
+	if info != nil && !reasoning.IsKnownClaudeModel(capabilityModel) && reasoning.IsKnownClaudeModel(info.GetOriginModelName()) {
+		capabilityModel = info.GetOriginModelName()
+	}
 	suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info))
 	preserveSuffix := opts.ShouldPreserveThinkingSuffix(req.Model)
 	if info != nil && opts.ShouldPreserveThinkingSuffix(info.GetOriginModelName()) {
@@ -33,8 +36,12 @@ func ApplyReasoning(ctx context.Context, req *dto.ClaudeRequest, info convmeta.M
 	// protocol, including Claude-compatible proxies that keep native controls
 	// instead of applying Anthropic model rules. Read portable effort for
 	// accounting metadata, but do not run the capability renderer or rewrite
-	// provider-native controls.
-	if !crossProtocol && source.IsEmpty() && suffix.IsEmpty() {
+	// provider-native controls. The one exception is a request that disables
+	// thinking on a model that cannot represent "disabled" at all: forwarding it
+	// would only produce an upstream rejection, so the renderer rewrites it to
+	// the model's closest supported mode.
+	if !crossProtocol && source.IsEmpty() && suffix.IsEmpty() &&
+		!(req.Thinking != nil && req.Thinking.Type == "disabled" && reasoning.ClaudeRejectsDisabledThinking(capabilityModel)) {
 		if info != nil {
 			effort := req.GetEfforts()
 			if effort == "" && req.Thinking != nil {
@@ -62,9 +69,6 @@ func ApplyReasoning(ctx context.Context, req *dto.ClaudeRequest, info convmeta.M
 		return err
 	}
 	convdiag.Add(ctx, diagnostics...)
-	if info != nil && !reasoning.IsKnownClaudeModel(capabilityModel) && reasoning.IsKnownClaudeModel(info.GetOriginModelName()) {
-		capabilityModel = info.GetOriginModelName()
-	}
 	intent, diagnostics, err := reasoning.MergeExplicitAndSuffix(explicit, suffix, req.Model)
 	if err != nil {
 		return err

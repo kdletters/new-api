@@ -89,3 +89,156 @@ func hasConversionDiagnosticCode(diagnostics []types.ConversionDiagnostic, code 
 	}
 	return false
 }
+
+func TestNormalizeClaudeToolInputSchemas(t *testing.T) {
+	t.Parallel()
+
+	unionSchema := func() map[string]any {
+		return map[string]any{
+			"type": "object",
+			"anyOf": []any{
+				map[string]any{"properties": map[string]any{"a": map[string]any{"type": "string"}}},
+			},
+		}
+	}
+	flatSchema := func() map[string]any {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"a": map[string]any{"type": "string"}},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		tools    any
+		wantName string
+	}{
+		{
+			name:     "converted pointer tool",
+			tools:    []any{&dto.Tool{Name: "converted", InputSchema: unionSchema()}},
+			wantName: "converted",
+		},
+		{
+			name:     "converted value tool",
+			tools:    []any{dto.Tool{Name: "value", InputSchema: unionSchema()}},
+			wantName: "value",
+		},
+		{
+			name:     "typed pointer tool slice",
+			tools:    []*dto.Tool{{Name: "typed", InputSchema: unionSchema()}},
+			wantName: "typed",
+		},
+		{
+			name:     "value tool slice",
+			tools:    []dto.Tool{{Name: "value-slice", InputSchema: unionSchema()}},
+			wantName: "value-slice",
+		},
+		{
+			name:     "map-shaped native tool",
+			tools:    []any{map[string]any{"name": "native", "input_schema": unionSchema()}},
+			wantName: "native",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := &dto.ClaudeRequest{Tools: tt.tools}
+			diagnostics := NormalizeClaudeToolInputSchemas(req)
+			require.Len(t, diagnostics, 1)
+			assert.Equal(t, "claude_tool_schema_union_flattened", diagnostics[0].Code)
+			assert.Equal(t, "tools[0].input_schema", diagnostics[0].Path)
+			assert.Equal(t, types.ConversionDiagnosticWarning, diagnostics[0].Severity)
+			assert.Contains(t, diagnostics[0].Message, tt.wantName)
+			assert.Contains(t, diagnostics[0].Message, "flattened because Claude rejects top-level unions")
+			assert.Equal(t, flatSchema(), toolSchemaByName(t, req.Tools, tt.wantName))
+		})
+	}
+}
+
+func TestNormalizeClaudeToolInputSchemasSkipsUnchangedTools(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		tools any
+	}{
+		{
+			name: "web search tools",
+			tools: []any{
+				map[string]any{
+					"type":         "web_search_20250305",
+					"name":         "web_search",
+					"input_schema": map[string]any{"type": "object", "anyOf": []any{}},
+				},
+				&dto.ClaudeWebSearchTool{Type: "web_search_20250305", Name: "web_search"},
+			},
+		},
+		{
+			name:  "tool without an input schema",
+			tools: []any{map[string]any{"name": "plain"}},
+		},
+		{
+			name: "non-object input schema",
+			tools: []any{
+				map[string]any{
+					"name":         "scalar",
+					"input_schema": map[string]any{"type": "string", "anyOf": []any{map[string]any{"type": "string"}}},
+				},
+			},
+		},
+		{
+			name:  "union-free schema",
+			tools: []any{&dto.Tool{Name: "flat", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"type": "string"}}}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := &dto.ClaudeRequest{Tools: tt.tools}
+			assert.Empty(t, NormalizeClaudeToolInputSchemas(req))
+		})
+	}
+}
+
+func toolSchemaByName(t *testing.T, tools any, name string) map[string]any {
+	t.Helper()
+
+	switch typed := tools.(type) {
+	case []any:
+		for _, item := range typed {
+			switch tool := item.(type) {
+			case *dto.Tool:
+				if tool.Name == name {
+					return tool.InputSchema
+				}
+			case dto.Tool:
+				if tool.Name == name {
+					return tool.InputSchema
+				}
+			case map[string]any:
+				if toolName, _ := tool["name"].(string); toolName == name {
+					schema, _ := tool["input_schema"].(map[string]any)
+					return schema
+				}
+			}
+		}
+	case []*dto.Tool:
+		for _, tool := range typed {
+			if tool != nil && tool.Name == name {
+				return tool.InputSchema
+			}
+		}
+	case []dto.Tool:
+		for i := range typed {
+			if typed[i].Name == name {
+				return typed[i].InputSchema
+			}
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
+}
