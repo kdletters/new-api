@@ -19,19 +19,23 @@ For commercial licensing, please contact support@quantumnous.com
 import type { QueryClient } from '@tanstack/react-query'
 
 import { readCachedStatus, statusQueryOptions } from '@/lib/status-query'
+import { useAuthStore } from '@/stores/auth-store'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
+
+/** Parsed module access, optionally restricted to an account-group allowlist. */
+export type HeaderNavModuleAccess = ModuleAccess & { groups?: string[] }
 
 export type HeaderNavModule = 'rankings' | 'pricing'
 
 export type HeaderNavModules = {
   home: boolean
   console: boolean
-  pricing: ModuleAccess
-  rankings: ModuleAccess
+  pricing: HeaderNavModuleAccess
+  rankings: HeaderNavModuleAccess
   docs: boolean
   about: boolean
-  [key: string]: boolean | ModuleAccess
+  [key: string]: boolean | HeaderNavModuleAccess
 }
 
 const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
@@ -74,7 +78,10 @@ export function parseHeaderNavBoolean(
   return fallback
 }
 
-function parseAccess(raw: unknown, fallback: ModuleAccess): ModuleAccess {
+function parseAccess(
+  raw: unknown,
+  fallback: ModuleAccess
+): HeaderNavModuleAccess {
   if (
     typeof raw === 'boolean' ||
     typeof raw === 'number' ||
@@ -87,10 +94,29 @@ function parseAccess(raw: unknown, fallback: ModuleAccess): ModuleAccess {
   }
   if (raw && typeof raw === 'object') {
     const r = raw as Record<string, unknown>
-    return {
+    const access: HeaderNavModuleAccess = {
       enabled: parseHeaderNavBoolean(r.enabled, fallback.enabled),
       requireAuth: parseHeaderNavBoolean(r.requireAuth, fallback.requireAuth),
     }
+    const rawGroups = r.groups
+    let candidates: unknown[] = []
+    if (Array.isArray(rawGroups)) {
+      candidates = rawGroups
+    } else if (typeof rawGroups === 'string') {
+      candidates = rawGroups.split(/[,，\n]/)
+    }
+    const groups = [
+      ...new Set(
+        candidates
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      ),
+    ]
+    if (groups.length > 0) {
+      access.groups = groups
+    }
+    return access
   }
   return { ...fallback }
 }
@@ -154,7 +180,24 @@ export function getModuleAccessFromStatus(
   status: Record<string, unknown> | null,
   module: HeaderNavModule
 ): ModuleAccess {
-  return parseHeaderNavModulesFromStatus(status)[module] ?? DEFAULTS[module]
+  const access =
+    parseHeaderNavModulesFromStatus(status)[module] ?? DEFAULTS[module]
+  const groups = access.groups
+  if (!groups || groups.length === 0) {
+    return { enabled: access.enabled, requireAuth: access.requireAuth }
+  }
+
+  // The allowlist is evaluated against the signed-in account group. The public
+  // status endpoint carries no identity, so the group is read from the client
+  // session; the API routes still enforce the allowlist server-side.
+  const userGroup = useAuthStore.getState().auth.user?.group?.trim()
+  if (!userGroup) {
+    return { enabled: access.enabled, requireAuth: true }
+  }
+  if (!groups.includes(userGroup)) {
+    return { enabled: false, requireAuth: true }
+  }
+  return { enabled: access.enabled, requireAuth: access.requireAuth }
 }
 
 /**

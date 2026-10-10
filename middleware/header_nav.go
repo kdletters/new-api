@@ -171,46 +171,6 @@ func writeHeaderNavGroupForbidden(c *gin.Context, module string) {
 	c.Abort()
 }
 
-// VisibleHeaderNavModules returns the header navigation option with modules
-// hidden when the current visitor is not allowed to view them, so the frontend
-// drops the navigation entry and its route guards redirect away.
-func VisibleHeaderNavModules(c *gin.Context) string {
-	common.OptionMapRWMutex.RLock()
-	raw := common.OptionMap["HeaderNavModules"]
-	common.OptionMapRWMutex.RUnlock()
-
-	if strings.TrimSpace(raw) == "" || !strings.Contains(raw, "\"groups\"") {
-		return raw
-	}
-
-	var parsed map[string]any
-	if err := common.Unmarshal([]byte(raw), &parsed); err != nil {
-		return raw
-	}
-
-	changed := false
-	for module, value := range parsed {
-		access := parseHeaderNavAccess(value, headerNavAccess{Enabled: true, RequireAuth: false})
-		if !access.Enabled || len(access.Groups) == 0 {
-			continue
-		}
-		if headerNavGroupAllowed(c, access.Groups) {
-			continue
-		}
-		parsed[module] = map[string]any{"enabled": false, "requireAuth": false}
-		changed = true
-	}
-	if !changed {
-		return raw
-	}
-
-	encoded, err := common.Marshal(parsed)
-	if err != nil {
-		return raw
-	}
-	return string(encoded)
-}
-
 func HeaderNavModuleAuth(module string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		access := getHeaderNavAccess(module)
