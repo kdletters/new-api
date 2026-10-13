@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row } from '@tanstack/react-table'
-import { Pencil, Power, PowerOff, RotateCcw } from 'lucide-react'
+import {
+  BadgeDollarSign,
+  Pencil,
+  Power,
+  PowerOff,
+  RotateCcw,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -55,6 +61,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     setOpen('reset-subscriptions')
   }
 
+  const handleOverrideSubscriptions = () => {
+    setCurrentRow(row.original)
+    setOpen('override-subscriptions')
+  }
+
   return (
     <div className='-ml-1.5 flex items-center gap-1'>
       <Tooltip>
@@ -89,6 +100,23 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           <RotateCcw />
         </TooltipTrigger>
         <TooltipContent>{t('Reset subscription quota')}</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              disabled={!complianceConfirmed}
+              onClick={handleOverrideSubscriptions}
+              aria-label={t('Override subscription quota')}
+            />
+          }
+        >
+          <BadgeDollarSign />
+        </TooltipTrigger>
+        <TooltipContent>{t('Override subscription quota')}</TooltipContent>
       </Tooltip>
 
       <Tooltip>
