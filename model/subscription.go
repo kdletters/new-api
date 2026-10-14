@@ -306,16 +306,6 @@ type SubscriptionResetResult struct {
 	AffectedUserIds  []int  `json:"-"`
 }
 
-// SubscriptionQuotaOverrideResult reports a bulk total-quota override.
-type SubscriptionQuotaOverrideResult struct {
-	PlanId          int    `json:"plan_id"`
-	AmountTotal     int64  `json:"amount_total"`
-	UpdatedCount    int    `json:"updated_count"`
-	UserCount       int    `json:"user_count"`
-	PlanTitle       string `json:"-"`
-	AffectedUserIds []int  `json:"-"`
-}
-
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
 	if plan == nil {
 		return 0, errors.New("plan is nil")
@@ -1138,76 +1128,44 @@ func AdminResetPlanSubscriptions(planId int, advanceResetTime bool) (*Subscripti
 	return result, nil
 }
 
-// adminOverridePlanSubscriptionsQuotaTx replaces the total quota of every
-// active subscription under the plan. It refuses a limited override when any
-// subscription already used more than the new total, which would otherwise
-// make later settlement fail.
-func adminOverridePlanSubscriptionsQuotaTx(tx *gorm.DB, plan *SubscriptionPlan, amountTotal int64, now int64) (*SubscriptionQuotaOverrideResult, error) {
-	if tx == nil || plan == nil {
-		return nil, errors.New("invalid override args")
+// SyncPlanSubscriptionsQuotaSnapshotTx overwrites the quota snapshot of every
+// active subscription under the plan. It fails when a limited quota is lower
+// than the amount a subscription already used, because later settlement would
+// otherwise reject every charge.
+func SyncPlanSubscriptionsQuotaSnapshotTx(tx *gorm.DB, planId int, amountTotal int64, now int64) (int, error) {
+	if tx == nil || planId <= 0 {
+		return 0, errors.New("invalid quota snapshot sync args")
+	}
+	if amountTotal < 0 {
+		return 0, errors.New("总额度不能为负数")
+	}
+	if amountTotal > common.MaxWalletQuota {
+		return 0, errors.New("总额度超出允许范围")
 	}
 	var subs []UserSubscription
 	if err := lockForUpdate(tx).
-		Where("plan_id = ? AND status = ? AND end_time > ?", plan.Id, "active", now).
-		Order("user_id asc, end_time asc, id asc").
+		Where("plan_id = ? AND status = ? AND end_time > ?", planId, "active", now).
+		Order("id asc").
 		Find(&subs).Error; err != nil {
-		return nil, err
+		return 0, err
 	}
 	for i := range subs {
 		if amountTotal > 0 && subs[i].AmountUsed > amountTotal {
-			return nil, errors.New("存在已用额度超过新总额度的订阅，无法覆盖")
+			return 0, errors.New("存在已用额度超过新总额度的有效订阅，无法覆盖")
 		}
 	}
-	userIds := make([]int, 0, len(subs))
-	seenUsers := make(map[int]struct{}, len(subs))
+	updated := 0
 	for i := range subs {
-		sub := &subs[i]
-		sub.AmountTotal = amountTotal
-		if err := tx.Save(sub).Error; err != nil {
-			return nil, err
-		}
-		if _, ok := seenUsers[sub.UserId]; ok {
+		if subs[i].AmountTotal == amountTotal {
 			continue
 		}
-		seenUsers[sub.UserId] = struct{}{}
-		userIds = append(userIds, sub.UserId)
-	}
-	return &SubscriptionQuotaOverrideResult{
-		PlanId:          plan.Id,
-		AmountTotal:     amountTotal,
-		UpdatedCount:    len(subs),
-		UserCount:       len(userIds),
-		PlanTitle:       plan.Title,
-		AffectedUserIds: userIds,
-	}, nil
-}
-
-// AdminOverridePlanSubscriptionsQuota overrides the total quota of all active
-// subscriptions of a plan. A zero total means unlimited.
-func AdminOverridePlanSubscriptionsQuota(planId int, amountTotal int64) (*SubscriptionQuotaOverrideResult, error) {
-	if planId <= 0 {
-		return nil, errors.New("invalid planId")
-	}
-	if amountTotal < 0 {
-		return nil, errors.New("总额度不能为负数")
-	}
-	if amountTotal > common.MaxWalletQuota {
-		return nil, errors.New("总额度超出允许范围")
-	}
-	var result *SubscriptionQuotaOverrideResult
-	now := GetDBTimestamp()
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		plan, err := getSubscriptionPlanByIdTx(tx, planId)
-		if err != nil {
-			return err
+		subs[i].AmountTotal = amountTotal
+		if err := tx.Save(&subs[i]).Error; err != nil {
+			return 0, err
 		}
-		result, err = adminOverridePlanSubscriptionsQuotaTx(tx, plan, amountTotal, now)
-		return err
-	})
-	if err != nil {
-		return nil, err
+		updated++
 	}
-	return result, nil
+	return updated, nil
 }
 
 type SubscriptionPreConsumeResult struct {

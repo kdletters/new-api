@@ -391,6 +391,11 @@ export function SubscriptionsMutateDrawer({
                           'Total quota included in the plan, usable per billing period. 0 means unlimited.'
                         )}
                       </FormDescription>
+                      <FormDescription>
+                        {t(
+                          'Quota changes are applied to all active subscriptions of this plan.'
+                        )}
+                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}

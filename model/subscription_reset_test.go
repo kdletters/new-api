@@ -208,7 +208,7 @@ func TestAdminResetPlanSubscriptionsNoMatchSucceeds(t *testing.T) {
 	assert.Empty(t, result.AffectedUserIds)
 }
 
-func TestAdminOverridePlanSubscriptionsQuotaUpdatesActiveSubscriptions(t *testing.T) {
+func TestSyncPlanSubscriptionsQuotaSnapshotUpdatesActiveSubscriptions(t *testing.T) {
 	truncateTables(t)
 
 	now := GetDBTimestamp()
@@ -240,16 +240,15 @@ func TestAdminOverridePlanSubscriptionsQuotaUpdatesActiveSubscriptions(t *testin
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9714, UserId: 303, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 0, StartTime: now - 7200, EndTime: now - 1, Status: "active"})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9715, UserId: 304, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 0, StartTime: now - 3600, EndTime: activeEnd, Status: "cancelled"})
 
-	result, err := AdminOverridePlanSubscriptionsQuota(plan.Id, 500000)
+	updated := 0
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		updated, err = SyncPlanSubscriptionsQuotaSnapshotTx(tx, plan.Id, 500000, now)
+		return err
+	})
 
 	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, plan.Id, result.PlanId)
-	assert.EqualValues(t, 500000, result.AmountTotal)
-	assert.Equal(t, 2, result.UpdatedCount)
-	assert.Equal(t, 2, result.UserCount)
-	assert.Equal(t, []int{301, 302}, result.AffectedUserIds)
-
+	assert.Equal(t, 2, updated)
 	first := getSubscriptionResetSub(t, 9711)
 	assert.EqualValues(t, 500000, first.AmountTotal)
 	assert.EqualValues(t, 300, first.AmountUsed)
@@ -259,7 +258,7 @@ func TestAdminOverridePlanSubscriptionsQuotaUpdatesActiveSubscriptions(t *testin
 	assert.EqualValues(t, 1000, getSubscriptionResetSub(t, 9715).AmountTotal)
 }
 
-func TestAdminOverridePlanSubscriptionsQuotaRejectsUsedExceedingNewTotal(t *testing.T) {
+func TestSyncPlanSubscriptionsQuotaSnapshotRejectsUsedExceedingNewTotal(t *testing.T) {
 	truncateTables(t)
 
 	now := GetDBTimestamp()
@@ -278,7 +277,10 @@ func TestAdminOverridePlanSubscriptionsQuotaRejectsUsedExceedingNewTotal(t *test
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9731, UserId: 401, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 600, StartTime: now - 3600, EndTime: activeEnd, Status: "active"})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9732, UserId: 402, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 100, StartTime: now - 3600, EndTime: activeEnd, Status: "active"})
 
-	_, err := AdminOverridePlanSubscriptionsQuota(plan.Id, 500)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, err := SyncPlanSubscriptionsQuotaSnapshotTx(tx, plan.Id, 500, now)
+		return err
+	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "已用额度超过")
@@ -286,7 +288,7 @@ func TestAdminOverridePlanSubscriptionsQuotaRejectsUsedExceedingNewTotal(t *test
 	assert.EqualValues(t, 1000, getSubscriptionResetSub(t, 9732).AmountTotal)
 }
 
-func TestAdminOverridePlanSubscriptionsQuotaAllowsUnlimitedAndValidatesBounds(t *testing.T) {
+func TestSyncPlanSubscriptionsQuotaSnapshotAllowsUnlimitedAndValidatesBounds(t *testing.T) {
 	truncateTables(t)
 
 	now := GetDBTimestamp()
@@ -302,31 +304,33 @@ func TestAdminOverridePlanSubscriptionsQuotaAllowsUnlimitedAndValidatesBounds(t 
 	seedSubscriptionResetPlan(t, plan)
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9751, UserId: 501, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 700, StartTime: now - 3600, EndTime: now + 30*24*3600, Status: "active"})
 
-	result, err := AdminOverridePlanSubscriptionsQuota(plan.Id, 0)
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, 1, result.UpdatedCount)
+	updated := 0
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		updated, err = SyncPlanSubscriptionsQuotaSnapshotTx(tx, plan.Id, 0, now)
+		return err
+	}))
+	assert.Equal(t, 1, updated)
 	sub := getSubscriptionResetSub(t, 9751)
 	assert.Zero(t, sub.AmountTotal)
 	assert.EqualValues(t, 700, sub.AmountUsed)
 
-	_, err = AdminOverridePlanSubscriptionsQuota(plan.Id, -1)
+	_, err := SyncPlanSubscriptionsQuotaSnapshotTx(DB, plan.Id, -1, now)
 	require.Error(t, err)
-	_, err = AdminOverridePlanSubscriptionsQuota(plan.Id, common.MaxWalletQuota+1)
+	_, err = SyncPlanSubscriptionsQuotaSnapshotTx(DB, plan.Id, common.MaxWalletQuota+1, now)
 	require.Error(t, err)
-	_, err = AdminOverridePlanSubscriptionsQuota(0, 100)
+	_, err = SyncPlanSubscriptionsQuotaSnapshotTx(DB, 0, 100, now)
 	require.Error(t, err)
 }
 
-func TestAdminOverridePlanSubscriptionsQuotaDatabaseMatrix(t *testing.T) {
+func TestSyncPlanSubscriptionsQuotaSnapshotDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
 			var driver gorm.Dialector
 			var databaseType common.DatabaseType
 			switch dialect {
 			case "sqlite":
-				driver = sqlite.Open(filepath.Join(t.TempDir(), "subscription_override.db"))
+				driver = sqlite.Open(filepath.Join(t.TempDir(), "subscription_snapshot.db"))
 				databaseType = common.DatabaseTypeSQLite
 			case "mysql":
 				dsn := strings.TrimSpace(os.Getenv("TEST_MYSQL_DSN"))
@@ -344,7 +348,7 @@ func TestAdminOverridePlanSubscriptionsQuotaDatabaseMatrix(t *testing.T) {
 				databaseType = common.DatabaseTypePostgreSQL
 			}
 
-			db, err := gorm.Open(driver, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "sub_override_test_"}})
+			db, err := gorm.Open(driver, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "sub_snapshot_test_"}})
 			require.NoError(t, err)
 			sqlDB, err := db.DB()
 			require.NoError(t, err)
@@ -384,12 +388,20 @@ func TestAdminOverridePlanSubscriptionsQuotaDatabaseMatrix(t *testing.T) {
 			seedSubscriptionResetPlan(t, plan)
 			seedSubscriptionResetSub(t, &UserSubscription{Id: 9771, UserId: 601, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 100, StartTime: now - 3600, EndTime: now + 30*24*3600, Status: "active"})
 
-			result, err := AdminOverridePlanSubscriptionsQuota(plan.Id, 2000)
-			require.NoError(t, err)
-			assert.Equal(t, 1, result.UpdatedCount)
+			syncNow := GetDBTimestamp()
+			updated := 0
+			require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+				var err error
+				updated, err = SyncPlanSubscriptionsQuotaSnapshotTx(tx, plan.Id, 2000, syncNow)
+				return err
+			}))
+			assert.Equal(t, 1, updated)
 			assert.EqualValues(t, 2000, getSubscriptionResetSub(t, 9771).AmountTotal)
 
-			_, err = AdminOverridePlanSubscriptionsQuota(plan.Id, 50)
+			err = db.Transaction(func(tx *gorm.DB) error {
+				_, err := SyncPlanSubscriptionsQuotaSnapshotTx(tx, plan.Id, 50, syncNow)
+				return err
+			})
 			require.Error(t, err)
 			assert.EqualValues(t, 2000, getSubscriptionResetSub(t, 9771).AmountTotal)
 		})

@@ -185,6 +185,10 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	if req.Plan.TotalAmount > common.MaxWalletQuota {
+		common.ApiErrorMsg(c, "总额度超出允许范围")
+		return
+	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
@@ -259,6 +263,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	if req.Plan.TotalAmount > common.MaxWalletQuota {
+		common.ApiErrorMsg(c, "总额度超出允许范围")
+		return
+	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
@@ -279,7 +287,12 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 
+	syncNow := model.GetDBTimestamp()
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var existingPlan model.SubscriptionPlan
+		if err := tx.Where("id = ?", id).First(&existingPlan).Error; err != nil {
+			return err
+		}
 		// update plan (allow zero values updates with map)
 		updateMap := map[string]any{
 			"title":                      req.Plan.Title,
@@ -311,7 +324,11 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
 		}
-		return nil
+		if existingPlan.TotalAmount == req.Plan.TotalAmount {
+			return nil
+		}
+		_, err := model.SyncPlanSubscriptionsQuotaSnapshotTx(tx, id, req.Plan.TotalAmount, syncNow)
+		return err
 	})
 	if err != nil {
 		common.ApiError(c, err)
@@ -504,59 +521,6 @@ func AdminResetPlanSubscriptions(c *gin.Context) {
 		"reset_count":        result.ResetCount,
 		"user_count":         result.UserCount,
 		"advance_reset_time": result.AdvanceResetTime,
-	})
-	common.ApiSuccess(c, result)
-}
-
-type AdminOverrideSubscriptionQuotaRequest struct {
-	AmountTotal int64 `json:"amount_total"`
-}
-
-func recordSubscriptionQuotaOverrideUserLogs(c *gin.Context, result *model.SubscriptionQuotaOverrideResult, adminInfo *model.AuditAdminInfo) {
-	if result == nil || result.UpdatedCount == 0 {
-		return
-	}
-	content := fmt.Sprintf("管理员将订阅套餐 %s（ID: %d）的总额度覆盖为 %d", result.PlanTitle, result.PlanId, result.AmountTotal)
-	for _, userId := range result.AffectedUserIds {
-		model.RecordLogWithAdminInfo(userId, model.LogTypeManage, content, adminInfo, nil, c)
-	}
-}
-
-// AdminOverridePlanSubscriptionsQuota overrides the total quota of all active
-// subscriptions under a plan.
-func AdminOverridePlanSubscriptionsQuota(c *gin.Context) {
-	planId, _ := strconv.Atoi(c.Param("id"))
-	if planId <= 0 {
-		common.ApiErrorMsg(c, "无效的ID")
-		return
-	}
-	var req AdminOverrideSubscriptionQuotaRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
-		return
-	}
-	if req.AmountTotal < 0 {
-		common.ApiErrorMsg(c, "总额度不能为负数")
-		return
-	}
-	if req.AmountTotal > common.MaxWalletQuota {
-		common.ApiErrorMsg(c, "总额度超出允许范围")
-		return
-	}
-	result, err := model.AdminOverridePlanSubscriptionsQuota(planId, req.AmountTotal)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	recordSubscriptionQuotaOverrideUserLogs(c, result, auditOperatorInfo(c))
-	common.SysLog(fmt.Sprintf("admin override subscription plan %d quota: amount_total=%d updated_count=%d user_count=%d",
-		result.PlanId, result.AmountTotal, result.UpdatedCount, result.UserCount))
-	recordManageAudit(c, "subscription.plan_quota_override", map[string]any{
-		"plan_id":       result.PlanId,
-		"plan_title":    result.PlanTitle,
-		"amount_total":  result.AmountTotal,
-		"updated_count": result.UpdatedCount,
-		"user_count":    result.UserCount,
 	})
 	common.ApiSuccess(c, result)
 }

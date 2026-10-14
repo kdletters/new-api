@@ -134,17 +134,6 @@ export interface SubscriptionResetResult {
   advance_reset_time: boolean
 }
 
-export interface OverridePlanSubscriptionsRequest {
-  amount_total: number
-}
-
-export interface SubscriptionQuotaOverrideResult {
-  plan_id: number
-  amount_total: number
-  updated_count: number
-  user_count: number
-}
-
 // ============================================================================
 // Self Subscription Data (user-facing)
 // ============================================================================
@@ -164,4 +153,3 @@ export type SubscriptionsDialogType =
   | 'update'
   | 'toggle-status'
   | 'reset-subscriptions'
-  | 'override-subscriptions'
