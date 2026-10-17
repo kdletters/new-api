@@ -222,10 +222,14 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 // effectiveBillingUsage; PostTextConsumeQuota performs that remap once and shares
 // the result with tiered billing, affinity observation and logging.
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
+	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
+	if wait := relayInfo.UpstreamUsageReconciliationWait; wait > 0 {
+		useTimeSeconds = max(useTimeSeconds-int64(wait/time.Second), 0)
+	}
 	summary := textQuotaSummary{
 		ModelName:            relayInfo.GetBillingModelName(),
 		TokenName:            ctx.GetString("token_name"),
-		UseTimeSeconds:       time.Now().Unix() - relayInfo.StartTime.Unix(),
+		UseTimeSeconds:       useTimeSeconds,
 		CompletionRatio:      relayInfo.PriceData.CompletionRatio,
 		CacheRatio:           relayInfo.PriceData.CacheRatio,
 		ImageRatio:           relayInfo.PriceData.ImageRatio,
@@ -480,6 +484,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
+	if relayInfo.UpstreamUsageReconciliation != "" {
+		other.SetAdmin("upstream_usage_reconciliation", map[string]any{
+			"status": relayInfo.UpstreamUsageReconciliation,
+			"log_id": relayInfo.UpstreamUsageLogID,
+			"quota":  relayInfo.UpstreamUsageQuota,
+		})
+	}
 	if adminRejectReason != "" {
 		other.SetAdmin("reject_reason", adminRejectReason)
 	}

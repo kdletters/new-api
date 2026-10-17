@@ -229,6 +229,27 @@ test.each([true, false])(
   }
 )
 
+test('estimated usage billing path is labeled as estimated billing', async () => {
+  const preview = renderPreview({
+    model_price: 0.25,
+    admin_info: {
+      usage_billing_path: 'billing-usage-anthropic-estimated',
+    },
+  })
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(
+    dialog.getByText(
+      'Estimated Billing (billing-usage-anthropic-estimated)'
+    )
+  ).toBeVisible()
+  expect(
+    dialog.queryByText(
+      'Upstream Response (billing-usage-anthropic-estimated)'
+    )
+  ).not.toBeInTheDocument()
+})
+
 test.each([
   {
     expression: 'tier("music", u("clips") * 0.25)',

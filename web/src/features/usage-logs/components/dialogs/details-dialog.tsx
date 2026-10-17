@@ -126,15 +126,15 @@ function getUsageBillingPathLabel(
     case USAGE_BILLING_PATH.OPENAI:
       return t('Upstream Response (billing-usage-openai)')
     case USAGE_BILLING_PATH.OPENAI_ESTIMATED:
-      return t('Upstream Response (billing-usage-openai-estimated)')
+      return t('Estimated Billing (billing-usage-openai-estimated)')
     case USAGE_BILLING_PATH.ANTHROPIC:
       return t('Upstream Response (billing-usage-anthropic)')
     case USAGE_BILLING_PATH.ANTHROPIC_ESTIMATED:
-      return t('Upstream Response (billing-usage-anthropic-estimated)')
+      return t('Estimated Billing (billing-usage-anthropic-estimated)')
     case USAGE_BILLING_PATH.GEMINI:
       return t('Upstream Response (billing-usage-gemini)')
     case USAGE_BILLING_PATH.GEMINI_ESTIMATED:
-      return t('Upstream Response (billing-usage-gemini-estimated)')
+      return t('Estimated Billing (billing-usage-gemini-estimated)')
     case USAGE_BILLING_PATH.UPSTREAM:
       return t('Upstream Response')
     default:

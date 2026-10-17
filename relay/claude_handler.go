@@ -152,6 +152,8 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return newAPIError
 	}
 
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+	usageDTO := usage.(*dto.Usage)
+	usageDTO = service.ReconcileEstimatedClaudeStreamUsage(c, info, usageDTO)
+	service.PostTextConsumeQuota(c, info, usageDTO, nil)
 	return nil
 }

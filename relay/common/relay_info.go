@@ -192,6 +192,12 @@ type RelayInfo struct {
 	FinalRequestRelayFormat types.RelayFormat
 
 	StreamStatus *StreamStatus
+	// UpstreamUsageReconciliation records whether a missing stream usage was
+	// repaired from the upstream New API token log after a client disconnect.
+	UpstreamUsageReconciliation     string
+	UpstreamUsageLogID              int64
+	UpstreamUsageQuota              int
+	UpstreamUsageReconciliationWait time.Duration
 	// VendorToolUsage reads the upstream's own billed tool counts from a raw
 	// response body (non-stream) or the raw terminal stream frame. The channel
 	// adaptor's Init sets it for upstreams whose usage extension names a billed
