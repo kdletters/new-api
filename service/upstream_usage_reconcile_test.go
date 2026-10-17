@@ -18,23 +18,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newEstimatedClaudeUsage() *dto.Usage {
-	billingUsage := dto.NewClaudeMessagesBillingUsage(&dto.ClaudeUsage{
-		InputTokens: 573708,
-	})
+func estimatedUsageForSemantic(t *testing.T, semantic string) *dto.Usage {
+	t.Helper()
+	var billingUsage *dto.BillingUsage
+	switch semantic {
+	case dto.BillingUsageSemanticAnthropic:
+		billingUsage = dto.NewClaudeMessagesBillingUsage(&dto.ClaudeUsage{InputTokens: 573708})
+	case dto.BillingUsageSemanticOpenAI:
+		billingUsage = dto.NewOpenAIResponsesBillingUsage(&dto.Usage{PromptTokens: 573708, TotalTokens: 573708})
+	case dto.BillingUsageSemanticGemini:
+		billingUsage = dto.NewEstimatedGeminiChatBillingUsage(&dto.Usage{PromptTokens: 573708, TotalTokens: 573708})
+	default:
+		t.Fatalf("unsupported semantic %q", semantic)
+	}
+	require.NotNil(t, billingUsage)
 	billingUsage.Estimated = true
 	return &dto.Usage{
 		PromptTokens:     573708,
 		CompletionTokens: 0,
 		TotalTokens:      573708,
 		InputTokens:      573708,
-		UsageSemantic:    dto.BillingUsageSemanticAnthropic,
-		UsageSource:      dto.BillingUsageSourceClaudeMessages,
+		UsageSemantic:    semantic,
+		UsageSource:      billingUsage.Source,
 		BillingUsage:     billingUsage,
 	}
 }
 
-func newClaudeReconcileContext(t *testing.T, baseURL string, upstreamRequestID string) (*gin.Context, *relaycommon.RelayInfo) {
+func newReconcileContext(t *testing.T, baseURL string, upstreamRequestID string, receivedResponseCount int) (*gin.Context, *relaycommon.RelayInfo) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -46,7 +56,7 @@ func newClaudeReconcileContext(t *testing.T, baseURL string, upstreamRequestID s
 	streamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, context.Canceled)
 	info := &relaycommon.RelayInfo{
 		IsStream:              true,
-		ReceivedResponseCount: 0,
+		ReceivedResponseCount: receivedResponseCount,
 		StreamStatus:          streamStatus,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelBaseUrl: baseURL,
@@ -56,20 +66,14 @@ func newClaudeReconcileContext(t *testing.T, baseURL string, upstreamRequestID s
 	return c, info
 }
 
-func TestReconcileEstimatedClaudeStreamUsageMatchesUpstreamTokenLog(t *testing.T) {
-	originalDelays := upstreamUsageReconcileDelays
-	upstreamUsageReconcileDelays = []time.Duration{0}
-	t.Cleanup(func() {
-		upstreamUsageReconcileDelays = originalDelays
-	})
-
-	const upstreamRequestID = "upstream-request-match"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func upstreamUsageLogServer(t *testing.T, upstreamRequestID string, promptTokens int, completionTokens int, other string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/api/log/token", r.URL.Path)
 		assert.Equal(t, "Bearer sk-upstream", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
-		_, err := io.WriteString(w, `{
+		_, err := fmt.Fprintf(w, `{
 			"success": true,
 			"message": "",
 			"data": [
@@ -82,43 +86,127 @@ func TestReconcileEstimatedClaudeStreamUsageMatchesUpstreamTokenLog(t *testing.T
 				},
 				{
 					"type": 2,
-					"request_id": "upstream-request-match",
-					"prompt_tokens": 121,
-					"completion_tokens": 7,
-					"other": "{\"cache_tokens\":544333}"
+					"request_id": %q,
+					"prompt_tokens": %d,
+					"completion_tokens": %d,
+					"other": %q
 				}
 			]
-		}`)
+		}`, upstreamRequestID, promptTokens, completionTokens, other)
 		assert.NoError(t, err)
 	}))
-	defer server.Close()
+}
 
-	for _, receivedResponseCount := range []int{0, 2731} {
-		t.Run(fmt.Sprintf("received_%d", receivedResponseCount), func(t *testing.T) {
-			c, info := newClaudeReconcileContext(t, server.URL, upstreamRequestID)
-			info.ReceivedResponseCount = receivedResponseCount
-			estimatedUsage := newEstimatedClaudeUsage()
+func TestReconcileEstimatedTextUsageMatchesUpstreamTokenLogBySemantic(t *testing.T) {
+	originalDelays := upstreamUsageReconcileDelays
+	upstreamUsageReconcileDelays = []time.Duration{0}
+	t.Cleanup(func() {
+		upstreamUsageReconcileDelays = originalDelays
+	})
 
-			reconciled := ReconcileEstimatedClaudeStreamUsage(c, info, estimatedUsage)
+	tests := []struct {
+		name              string
+		semantic          string
+		received          int
+		promptTokens      int
+		completionTokens  int
+		cacheTokens       int
+		upstreamOther     string
+		expectedSource    string
+		expectClaudeUsage bool
+		expectOpenAIUsage bool
+		expectGeminiUsage bool
+	}{
+		{
+			name:              "anthropic zero frame",
+			semantic:          dto.BillingUsageSemanticAnthropic,
+			received:          0,
+			promptTokens:      121,
+			completionTokens:  7,
+			cacheTokens:       544333,
+			upstreamOther:     `{"cache_tokens":544333,"usage_semantic":"anthropic"}`,
+			expectedSource:    dto.BillingUsageSourceClaudeMessages,
+			expectClaudeUsage: true,
+		},
+		{
+			name:              "anthropic partial stream",
+			semantic:          dto.BillingUsageSemanticAnthropic,
+			received:          2731,
+			promptTokens:      121,
+			completionTokens:  7,
+			cacheTokens:       544333,
+			upstreamOther:     `{"cache_tokens":544333,"usage_semantic":"anthropic"}`,
+			expectedSource:    dto.BillingUsageSourceClaudeMessages,
+			expectClaudeUsage: true,
+		},
+		{
+			name:              "openai responses partial stream",
+			semantic:          dto.BillingUsageSemanticOpenAI,
+			received:          2731,
+			promptTokens:      1000,
+			completionTokens:  50,
+			cacheTokens:       1234,
+			upstreamOther:     `{"cache_tokens":1234,"usage_semantic":"openai"}`,
+			expectedSource:    dto.BillingUsageSourceOAIResponses,
+			expectOpenAIUsage: true,
+		},
+		{
+			name:              "gemini zero frame",
+			semantic:          dto.BillingUsageSemanticGemini,
+			received:          0,
+			promptTokens:      800,
+			completionTokens:  40,
+			cacheTokens:       222,
+			upstreamOther:     `{"cache_tokens":222,"usage_semantic":"gemini"}`,
+			expectedSource:    dto.BillingUsageSourceGeminiChat,
+			expectGeminiUsage: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const upstreamRequestID = "upstream-request-match"
+			server := upstreamUsageLogServer(t, upstreamRequestID, test.promptTokens, test.completionTokens, test.upstreamOther)
+			defer server.Close()
+
+			c, info := newReconcileContext(t, server.URL, upstreamRequestID, test.received)
+			reconciled := ReconcileEstimatedTextUsage(c, info, estimatedUsageForSemantic(t, test.semantic))
 
 			require.NotNil(t, reconciled)
 			require.NotNil(t, reconciled.BillingUsage)
-			assert.Equal(t, dto.BillingUsageSemanticAnthropic, reconciled.BillingUsage.Semantic)
 			assert.False(t, reconciled.BillingUsage.Estimated)
-			require.NotNil(t, reconciled.BillingUsage.ClaudeUsage)
-			assert.Equal(t, 121, reconciled.BillingUsage.ClaudeUsage.InputTokens)
-			assert.Equal(t, 7, reconciled.BillingUsage.ClaudeUsage.OutputTokens)
-			assert.Equal(t, 544333, reconciled.BillingUsage.ClaudeUsage.CacheReadInputTokens)
-			assert.Equal(t, 121, reconciled.PromptTokens)
-			assert.Equal(t, 7, reconciled.CompletionTokens)
-			assert.Equal(t, 544333, reconciled.PromptTokensDetails.CachedTokens)
+			assert.Equal(t, test.semantic, reconciled.UsageSemantic)
+			assert.Equal(t, test.semantic, reconciled.BillingUsage.Semantic)
+			assert.Equal(t, test.expectedSource, reconciled.UsageSource)
+			assert.Equal(t, test.promptTokens, reconciled.PromptTokens)
+			assert.Equal(t, test.completionTokens, reconciled.CompletionTokens)
+			assert.Equal(t, test.cacheTokens, reconciled.PromptTokensDetails.CachedTokens)
 			assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
 			assert.Equal(t, "matched", info.UpstreamUsageReconciliation)
+
+			if test.expectClaudeUsage {
+				require.NotNil(t, reconciled.BillingUsage.ClaudeUsage)
+				assert.Equal(t, test.promptTokens, reconciled.BillingUsage.ClaudeUsage.InputTokens)
+				assert.Equal(t, test.completionTokens, reconciled.BillingUsage.ClaudeUsage.OutputTokens)
+				assert.Equal(t, test.cacheTokens, reconciled.BillingUsage.ClaudeUsage.CacheReadInputTokens)
+			}
+			if test.expectOpenAIUsage {
+				require.NotNil(t, reconciled.BillingUsage.OpenAIUsage)
+				assert.Equal(t, test.promptTokens, reconciled.BillingUsage.OpenAIUsage.PromptTokens)
+				assert.Equal(t, test.completionTokens, reconciled.BillingUsage.OpenAIUsage.CompletionTokens)
+				assert.Equal(t, test.cacheTokens, reconciled.BillingUsage.OpenAIUsage.PromptTokensDetails.CachedTokens)
+			}
+			if test.expectGeminiUsage {
+				require.NotNil(t, reconciled.BillingUsage.GeminiUsageMetadata)
+				assert.Equal(t, test.promptTokens, reconciled.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
+				assert.Equal(t, test.completionTokens, reconciled.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
+				assert.Equal(t, test.cacheTokens, reconciled.BillingUsage.GeminiUsageMetadata.CachedContentTokenCount)
+			}
 		})
 	}
 }
 
-func TestReconcileEstimatedClaudeStreamUsageKeepsUsageWhenUpstreamLogIsMissing(t *testing.T) {
+func TestReconcileEstimatedTextUsageKeepsUsageWhenUpstreamLogIsMissing(t *testing.T) {
 	originalDelays := upstreamUsageReconcileDelays
 	upstreamUsageReconcileDelays = []time.Duration{0}
 	t.Cleanup(func() {
@@ -148,10 +236,10 @@ func TestReconcileEstimatedClaudeStreamUsageKeepsUsageWhenUpstreamLogIsMissing(t
 	}))
 	defer server.Close()
 
-	c, info := newClaudeReconcileContext(t, server.URL, upstreamRequestID)
-	estimatedUsage := newEstimatedClaudeUsage()
+	c, info := newReconcileContext(t, server.URL, upstreamRequestID, 100)
+	estimatedUsage := estimatedUsageForSemantic(t, dto.BillingUsageSemanticAnthropic)
 
-	reconciled := ReconcileEstimatedClaudeStreamUsage(c, info, estimatedUsage)
+	reconciled := ReconcileEstimatedTextUsage(c, info, estimatedUsage)
 
 	require.NotNil(t, reconciled)
 	assert.Equal(t, estimatedUsage, reconciled)

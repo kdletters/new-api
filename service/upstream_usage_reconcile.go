@@ -58,13 +58,12 @@ type upstreamTokenUsageLog struct {
 	Other             any    `json:"other"`
 }
 
-// ReconcileEstimatedClaudeStreamUsage replaces a local fallback estimate with the
-// upstream New API token log when an incomplete Claude stream leaves billing
-// usage estimated. This covers both zero-frame disconnects and partial streams
-// that ended before the terminal usage frame. The caller is already gone at this
-// point, so a bounded post-stream wait does not delay the client. If the
-// upstream log is unavailable, the estimate is kept.
-func ReconcileEstimatedClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) (result *dto.Usage) {
+// ReconcileEstimatedTextUsage replaces a local fallback estimate with the
+// upstream New API token log when an incomplete text stream leaves billing usage
+// estimated. It supports Anthropic, OpenAI, and Gemini usage semantics. The
+// caller is already gone at this point, so a bounded post-stream wait does not
+// delay the client. If the upstream log is unavailable, the estimate is kept.
+func ReconcileEstimatedTextUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) (result *dto.Usage) {
 	if c == nil || info == nil || info.ChannelMeta == nil || usage == nil || usage.BillingUsage == nil {
 		return usage
 	}
@@ -126,7 +125,11 @@ func ReconcileEstimatedClaudeStreamUsage(c *gin.Context, info *relaycommon.Relay
 			lastErr = nil
 			continue
 		}
-		reconciled, ok := upstreamUsageFromTokenLog(entry)
+		expectedSemantic := usage.BillingUsage.Semantic
+		if expectedSemantic == "" {
+			expectedSemantic = usage.UsageSemantic
+		}
+		reconciled, ok := upstreamUsageFromTokenLog(entry, expectedSemantic, usage.BillingUsage.Source)
 		if !ok {
 			lastErr = fmt.Errorf("upstream usage log %d has invalid or incomplete usage", entry.ID)
 			continue
@@ -230,7 +233,16 @@ func fetchUpstreamTokenUsageLog(ctx context.Context, client *http.Client, endpoi
 	return nil, nil
 }
 
-func upstreamUsageFromTokenLog(entry *upstreamTokenUsageLog) (*dto.Usage, bool) {
+type upstreamUsageCounts struct {
+	prompt          int
+	completion      int
+	cacheRead       int
+	cacheCreation   int
+	cacheCreation5m int
+	cacheCreation1h int
+}
+
+func upstreamUsageFromTokenLog(entry *upstreamTokenUsageLog, expectedSemantic string, expectedSource string) (*dto.Usage, bool) {
 	if entry == nil || entry.Type != model.LogTypeConsume {
 		return nil, false
 	}
@@ -241,71 +253,150 @@ func upstreamUsageFromTokenLog(entry *upstreamTokenUsageLog) (*dto.Usage, bool) 
 	}
 
 	other := upstreamUsageOtherMap(entry.Other)
-	cacheTokens, ok := upstreamUsageCount(other, "cache_tokens")
-	if !ok {
+	counts := upstreamUsageCounts{prompt: entry.PromptTokens, completion: entry.CompletionTokens}
+	var ok bool
+	if counts.cacheRead, ok = upstreamUsageCount(other, "cache_tokens"); !ok {
 		return nil, false
 	}
-	cacheCreationTokens, ok := upstreamUsageCount(other, "cache_creation_tokens")
-	if !ok {
+	if counts.cacheCreation, ok = upstreamUsageCount(other, "cache_creation_tokens"); !ok {
 		return nil, false
 	}
-	cacheCreation5m, ok := upstreamUsageCount(other, "cache_creation_tokens_5m")
-	if !ok {
+	if counts.cacheCreation5m, ok = upstreamUsageCount(other, "cache_creation_tokens_5m"); !ok {
 		return nil, false
 	}
-	cacheCreation1h, ok := upstreamUsageCount(other, "cache_creation_tokens_1h")
-	if !ok {
+	if counts.cacheCreation1h, ok = upstreamUsageCount(other, "cache_creation_tokens_1h"); !ok {
 		return nil, false
 	}
-	if cacheCreationTokens == 0 {
-		if cacheCreation5m > common.MaxQuota-cacheCreation1h {
+	if counts.cacheCreation == 0 {
+		if counts.cacheCreation5m > common.MaxQuota-counts.cacheCreation1h {
 			return nil, false
 		}
-		cacheCreationTokens = cacheCreation5m + cacheCreation1h
-	} else if cacheCreation5m > cacheCreationTokens ||
-		cacheCreation1h > cacheCreationTokens-cacheCreation5m {
+		counts.cacheCreation = counts.cacheCreation5m + counts.cacheCreation1h
+	} else if counts.cacheCreation5m > counts.cacheCreation ||
+		counts.cacheCreation1h > counts.cacheCreation-counts.cacheCreation5m {
 		return nil, false
 	}
-	if entry.PromptTokens == 0 && entry.CompletionTokens == 0 && cacheTokens == 0 && cacheCreationTokens == 0 {
+	if counts.prompt == 0 && counts.completion == 0 && counts.cacheRead == 0 && counts.cacheCreation == 0 {
 		return nil, false
 	}
 
-	claudeUsage := &dto.ClaudeUsage{
-		InputTokens:                 entry.PromptTokens,
-		OutputTokens:                entry.CompletionTokens,
-		CacheReadInputTokens:        cacheTokens,
-		CacheCreationInputTokens:    cacheCreationTokens,
-		ClaudeCacheCreation5mTokens: cacheCreation5m,
-		ClaudeCacheCreation1hTokens: cacheCreation1h,
+	semantic := strings.ToLower(strings.TrimSpace(upstreamUsageString(other, "usage_semantic")))
+	if !isSupportedUsageSemantic(semantic) {
+		semantic = strings.ToLower(strings.TrimSpace(expectedSemantic))
 	}
-	if cacheCreation5m > 0 || cacheCreation1h > 0 {
+	switch semantic {
+	case dto.BillingUsageSemanticAnthropic:
+		return anthropicUsageFromCounts(counts), true
+	case dto.BillingUsageSemanticGemini:
+		return geminiUsageFromCounts(counts)
+	case dto.BillingUsageSemanticOpenAI:
+		source := strings.TrimSpace(upstreamUsageString(other, "usage_source"))
+		if source == "" {
+			source = expectedSource
+		}
+		return openAIUsageFromCounts(counts, source), true
+	default:
+		return nil, false
+	}
+}
+
+func isSupportedUsageSemantic(semantic string) bool {
+	switch semantic {
+	case dto.BillingUsageSemanticAnthropic, dto.BillingUsageSemanticOpenAI, dto.BillingUsageSemanticGemini:
+		return true
+	default:
+		return false
+	}
+}
+
+func anthropicUsageFromCounts(counts upstreamUsageCounts) *dto.Usage {
+	claudeUsage := &dto.ClaudeUsage{
+		InputTokens:                 counts.prompt,
+		OutputTokens:                counts.completion,
+		CacheReadInputTokens:        counts.cacheRead,
+		CacheCreationInputTokens:    counts.cacheCreation,
+		ClaudeCacheCreation5mTokens: counts.cacheCreation5m,
+		ClaudeCacheCreation1hTokens: counts.cacheCreation1h,
+	}
+	if counts.cacheCreation5m > 0 || counts.cacheCreation1h > 0 {
 		claudeUsage.CacheCreation = &dto.ClaudeCacheCreationUsage{
-			Ephemeral5mInputTokens: cacheCreation5m,
-			Ephemeral1hInputTokens: cacheCreation1h,
+			Ephemeral5mInputTokens: counts.cacheCreation5m,
+			Ephemeral1hInputTokens: counts.cacheCreation1h,
 		}
 	}
-	billingUsage := dto.NewClaudeMessagesBillingUsage(claudeUsage)
+	return &dto.Usage{
+		PromptTokens:         counts.prompt,
+		CompletionTokens:     counts.completion,
+		TotalTokens:          counts.prompt + counts.completion,
+		PromptCacheHitTokens: counts.cacheRead,
+		UsageSemantic:        dto.BillingUsageSemanticAnthropic,
+		UsageSource:          dto.BillingUsageSourceClaudeMessages,
+		BillingUsage:         dto.NewClaudeMessagesBillingUsage(claudeUsage),
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         counts.cacheRead,
+			CachedCreationTokens: counts.cacheCreation,
+		},
+		InputTokens:                 counts.prompt,
+		OutputTokens:                counts.completion,
+		ClaudeCacheCreation5mTokens: counts.cacheCreation5m,
+		ClaudeCacheCreation1hTokens: counts.cacheCreation1h,
+	}
+}
+
+func openAIUsageFromCounts(counts upstreamUsageCounts, source string) *dto.Usage {
+	if source == "" {
+		source = dto.BillingUsageSourceOAIChat
+	}
+	usage := &dto.Usage{
+		PromptTokens:         counts.prompt,
+		CompletionTokens:     counts.completion,
+		TotalTokens:          counts.prompt + counts.completion,
+		PromptCacheHitTokens: counts.cacheRead,
+		UsageSemantic:        dto.BillingUsageSemanticOpenAI,
+		UsageSource:          source,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         counts.cacheRead,
+			CachedCreationTokens: counts.cacheCreation,
+		},
+		InputTokens:  counts.prompt,
+		OutputTokens: counts.completion,
+	}
+	if source == dto.BillingUsageSourceOAIResponses {
+		usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(usage)
+	} else {
+		usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
+	}
+	return usage
+}
+
+func geminiUsageFromCounts(counts upstreamUsageCounts) (*dto.Usage, bool) {
+	metadata := &dto.GeminiUsageMetadata{
+		PromptTokenCount:        counts.prompt,
+		CandidatesTokenCount:    counts.completion,
+		TotalTokenCount:         counts.prompt + counts.completion,
+		CachedContentTokenCount: counts.cacheRead,
+	}
+	billingUsage := dto.NewGeminiChatBillingUsage(metadata)
 	if billingUsage == nil {
 		return nil, false
 	}
+	return billingUsage.CanonicalUsage()
+}
 
-	return &dto.Usage{
-		PromptTokens:         entry.PromptTokens,
-		CompletionTokens:     entry.CompletionTokens,
-		TotalTokens:          entry.PromptTokens + entry.CompletionTokens,
-		PromptCacheHitTokens: cacheTokens,
-		UsageSemantic:        "anthropic",
-		UsageSource:          "anthropic",
-		BillingUsage:         billingUsage,
-		PromptTokensDetails: dto.InputTokenDetails{
-			CachedTokens:         cacheTokens,
-			CachedCreationTokens: cacheCreationTokens,
-		},
-		InputTokens:                 entry.PromptTokens,
-		OutputTokens:                entry.CompletionTokens,
-		ClaudeCacheCreation5mTokens: cacheCreation5m,
-		ClaudeCacheCreation1hTokens: cacheCreation1h,
-	}, true
+func upstreamUsageString(other map[string]any, key string) string {
+	if len(other) == 0 {
+		return ""
+	}
+	value, ok := other[key]
+	if !ok {
+		return ""
+	}
+	switch value := value.(type) {
+	case string:
+		return value
+	default:
+		return ""
+	}
 }
 
 func upstreamUsageOtherMap(raw any) map[string]any {
