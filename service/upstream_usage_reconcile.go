@@ -59,9 +59,11 @@ type upstreamTokenUsageLog struct {
 }
 
 // ReconcileEstimatedClaudeStreamUsage replaces a local fallback estimate with the
-// upstream New API token log when a stream ends before any data frame arrives.
-// The caller is already gone at this point, so a bounded post-stream wait does
-// not delay the client. If the upstream log is unavailable, the estimate is kept.
+// upstream New API token log when an incomplete Claude stream leaves billing
+// usage estimated. This covers both zero-frame disconnects and partial streams
+// that ended before the terminal usage frame. The caller is already gone at this
+// point, so a bounded post-stream wait does not delay the client. If the
+// upstream log is unavailable, the estimate is kept.
 func ReconcileEstimatedClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) (result *dto.Usage) {
 	if c == nil || info == nil || info.ChannelMeta == nil || usage == nil || usage.BillingUsage == nil {
 		return usage
@@ -69,10 +71,7 @@ func ReconcileEstimatedClaudeStreamUsage(c *gin.Context, info *relaycommon.Relay
 	if strings.TrimSpace(info.ChannelBaseUrl) == "" || strings.TrimSpace(info.ApiKey) == "" {
 		return usage
 	}
-	if !usage.BillingUsage.Estimated || info.StreamStatus == nil || info.StreamStatus.EndReason != relaycommon.StreamEndReasonClientGone {
-		return usage
-	}
-	if info.ReceivedResponseCount != 0 {
+	if !usage.BillingUsage.Estimated {
 		return usage
 	}
 	upstreamRequestID := strings.TrimSpace(c.GetString(common.UpstreamRequestIdKey))

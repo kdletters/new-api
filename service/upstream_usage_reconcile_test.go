@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -92,24 +93,29 @@ func TestReconcileEstimatedClaudeStreamUsageMatchesUpstreamTokenLog(t *testing.T
 	}))
 	defer server.Close()
 
-	c, info := newClaudeReconcileContext(t, server.URL, upstreamRequestID)
-	estimatedUsage := newEstimatedClaudeUsage()
+	for _, receivedResponseCount := range []int{0, 2731} {
+		t.Run(fmt.Sprintf("received_%d", receivedResponseCount), func(t *testing.T) {
+			c, info := newClaudeReconcileContext(t, server.URL, upstreamRequestID)
+			info.ReceivedResponseCount = receivedResponseCount
+			estimatedUsage := newEstimatedClaudeUsage()
 
-	reconciled := ReconcileEstimatedClaudeStreamUsage(c, info, estimatedUsage)
+			reconciled := ReconcileEstimatedClaudeStreamUsage(c, info, estimatedUsage)
 
-	require.NotNil(t, reconciled)
-	require.NotNil(t, reconciled.BillingUsage)
-	assert.Equal(t, dto.BillingUsageSemanticAnthropic, reconciled.BillingUsage.Semantic)
-	assert.False(t, reconciled.BillingUsage.Estimated)
-	require.NotNil(t, reconciled.BillingUsage.ClaudeUsage)
-	assert.Equal(t, 121, reconciled.BillingUsage.ClaudeUsage.InputTokens)
-	assert.Equal(t, 7, reconciled.BillingUsage.ClaudeUsage.OutputTokens)
-	assert.Equal(t, 544333, reconciled.BillingUsage.ClaudeUsage.CacheReadInputTokens)
-	assert.Equal(t, 121, reconciled.PromptTokens)
-	assert.Equal(t, 7, reconciled.CompletionTokens)
-	assert.Equal(t, 544333, reconciled.PromptTokensDetails.CachedTokens)
-	assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
-	assert.Equal(t, "matched", info.UpstreamUsageReconciliation)
+			require.NotNil(t, reconciled)
+			require.NotNil(t, reconciled.BillingUsage)
+			assert.Equal(t, dto.BillingUsageSemanticAnthropic, reconciled.BillingUsage.Semantic)
+			assert.False(t, reconciled.BillingUsage.Estimated)
+			require.NotNil(t, reconciled.BillingUsage.ClaudeUsage)
+			assert.Equal(t, 121, reconciled.BillingUsage.ClaudeUsage.InputTokens)
+			assert.Equal(t, 7, reconciled.BillingUsage.ClaudeUsage.OutputTokens)
+			assert.Equal(t, 544333, reconciled.BillingUsage.ClaudeUsage.CacheReadInputTokens)
+			assert.Equal(t, 121, reconciled.PromptTokens)
+			assert.Equal(t, 7, reconciled.CompletionTokens)
+			assert.Equal(t, 544333, reconciled.PromptTokensDetails.CachedTokens)
+			assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
+			assert.Equal(t, "matched", info.UpstreamUsageReconciliation)
+		})
+	}
 }
 
 func TestReconcileEstimatedClaudeStreamUsageKeepsUsageWhenUpstreamLogIsMissing(t *testing.T) {
