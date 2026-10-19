@@ -26,14 +26,14 @@ const (
 	upstreamTokenUsageLogPath           = "/api/log/token"
 	upstreamTokenUsageLogMaxBodyBytes   = 8 << 20
 	upstreamTokenUsageLogRequestTimeout = 8 * time.Second
-	upstreamUsageReconcileTotalTimeout  = 20 * time.Second
+	upstreamUsageReconcileTotalTimeout  = 90 * time.Second
 )
 
 var upstreamUsageReconcileDelays = []time.Duration{
 	0,
-	time.Second,
-	2 * time.Second,
-	4 * time.Second,
+	5 * time.Second,
+	15 * time.Second,
+	30 * time.Second,
 }
 
 var errUpstreamUsageLogEndpointUnavailable = errors.New("upstream usage log endpoint unavailable")
@@ -184,7 +184,16 @@ func fetchUpstreamTokenUsageLog(ctx context.Context, client *http.Client, endpoi
 	requestCtx, cancel := context.WithTimeout(ctx, upstreamTokenUsageLogRequestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse upstream usage log URL: %w", err)
+	}
+	query := endpointURL.Query()
+	query.Set("request_id", requestID)
+	query.Set("upstream_request_id", requestID)
+	endpointURL.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpointURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}

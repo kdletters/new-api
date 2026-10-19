@@ -68,6 +68,30 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
+func writeRelayStreamError(c *gin.Context, relayFormat types.RelayFormat, apiErr *types.NewAPIError) bool {
+	if c == nil || c.Writer == nil || apiErr == nil || !c.Writer.Written() {
+		return false
+	}
+	if relayFormat != types.RelayFormatClaude {
+		return false
+	}
+	payload, err := common.Marshal(gin.H{
+		"type":  "error",
+		"error": apiErr.ToClaudeError(),
+	})
+	if err != nil {
+		logger.LogError(c, "failed to marshal Claude stream error: "+err.Error())
+		return true
+	}
+	helper.SetEventStreamHeaders(c)
+	if _, err := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", payload); err != nil {
+		logger.LogDebug(c, "failed to write Claude stream error: "+err.Error())
+		return true
+	}
+	_ = helper.FlushWriter(c)
+	return true
+}
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -99,6 +123,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			service.RecordRequestPolicyTermination(c, newAPIError)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			if writeRelayStreamError(c, relayFormat, newAPIError) {
+				return
+			}
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())

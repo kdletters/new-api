@@ -85,7 +85,14 @@ func GetLogByKey(c *gin.Context) {
 		})
 		return
 	}
-	logs, err := model.GetLogByTokenId(tokenId)
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	logs, err := model.GetLogByTokenId(tokenId, model.TokenLogQuery{
+		RequestID:         c.Query("request_id"),
+		UpstreamRequestID: c.Query("upstream_request_id"),
+		StartTimestamp:    startTimestamp,
+		EndTimestamp:      endTimestamp,
+	})
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,

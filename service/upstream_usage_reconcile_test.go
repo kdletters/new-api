@@ -71,6 +71,8 @@ func upstreamUsageLogServer(t *testing.T, upstreamRequestID string, promptTokens
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/api/log/token", r.URL.Path)
+		assert.Equal(t, upstreamRequestID, r.URL.Query().Get("request_id"))
+		assert.Equal(t, upstreamRequestID, r.URL.Query().Get("upstream_request_id"))
 		assert.Equal(t, "Bearer sk-upstream", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
 		_, err := fmt.Fprintf(w, `{
@@ -217,6 +219,8 @@ func TestReconcileEstimatedTextUsageKeepsUsageWhenUpstreamLogIsMissing(t *testin
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/api/log/token", r.URL.Path)
+		assert.Equal(t, upstreamRequestID, r.URL.Query().Get("request_id"))
+		assert.Equal(t, upstreamRequestID, r.URL.Query().Get("upstream_request_id"))
 		assert.Equal(t, "Bearer sk-upstream", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{

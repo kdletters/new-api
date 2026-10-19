@@ -97,3 +97,20 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 		assert.NotContains(t, userOther, key)
 	}
 }
+
+func TestWriteRelayStreamErrorAfterHeadersWritten(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	_, err := ctx.Writer.Write([]byte(": PING\n\n"))
+	require.NoError(t, err)
+
+	apiErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
+	written := writeRelayStreamError(ctx, types.RelayFormatClaude, apiErr)
+
+	require.True(t, written)
+	assert.Contains(t, recorder.Body.String(), "event: error")
+	assert.Contains(t, recorder.Body.String(), `"type":"error"`)
+	assert.Contains(t, recorder.Body.String(), `"message":"upstream failed"`)
+}

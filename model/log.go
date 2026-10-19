@@ -162,12 +162,40 @@ func FormatRootLogs(logs []*Log) {
 	}
 }
 
-func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+type TokenLogQuery struct {
+	RequestID         string
+	UpstreamRequestID string
+	StartTimestamp    int64
+	EndTimestamp      int64
+}
+
+func GetLogByTokenId(tokenId int, query TokenLogQuery) (logs []*Log, err error) {
 	order := "id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
+	limit := common.MaxRecentItems
+	tx := LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId)
+	requestID := strings.TrimSpace(query.RequestID)
+	upstreamRequestID := strings.TrimSpace(query.UpstreamRequestID)
+	switch {
+	case requestID != "" && upstreamRequestID != "":
+		tx = tx.Where("request_id = ? OR upstream_request_id = ?", requestID, upstreamRequestID)
+		limit = 1
+	case requestID != "":
+		tx = tx.Where("request_id = ?", requestID)
+		limit = 1
+	case upstreamRequestID != "":
+		tx = tx.Where("upstream_request_id = ?", upstreamRequestID)
+		limit = 1
+	}
+	if query.StartTimestamp > 0 {
+		tx = tx.Where("created_at >= ?", query.StartTimestamp)
+	}
+	if query.EndTimestamp > 0 {
+		tx = tx.Where("created_at <= ?", query.EndTimestamp)
+	}
+	err = tx.Order(order).Limit(limit).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
