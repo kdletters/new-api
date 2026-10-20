@@ -251,3 +251,94 @@ func TestReconcileEstimatedTextUsageKeepsUsageWhenUpstreamLogIsMissing(t *testin
 	assert.True(t, reconciled.BillingUsage.Estimated)
 	assert.Equal(t, "not_found", info.UpstreamUsageReconciliation)
 }
+
+func TestReconcileEstimatedTextUsageTreatsUpstream499AsNotBilled(t *testing.T) {
+	originalDelays := upstreamUsageReconcileDelays
+	upstreamUsageReconcileDelays = []time.Duration{0}
+	t.Cleanup(func() {
+		upstreamUsageReconcileDelays = originalDelays
+	})
+
+	const upstreamRequestID = "upstream-request-client-cancelled"
+	tests := []struct {
+		name    string
+		content string
+		other   string
+	}{
+		{name: "content status code", content: "status_code=499, client disconnected"},
+		{name: "other status code", other: `{"status_code":499,"error_code":"client_cancelled"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/api/log/token", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprintf(w, `{
+					"success": true,
+					"message": "",
+					"data": [{
+						"id": 84,
+						"type": 5,
+						"request_id": %q,
+						"content": %q,
+						"prompt_tokens": 0,
+						"completion_tokens": 0,
+						"quota": 0,
+						"is_stream": true,
+						"other": %q
+					}]
+				}`, upstreamRequestID, test.content, test.other)
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+
+			c, info := newReconcileContext(t, server.URL, upstreamRequestID, 0)
+			reconciled := ReconcileEstimatedTextUsage(c, info, estimatedUsageForSemantic(t, dto.BillingUsageSemanticAnthropic))
+
+			require.NotNil(t, reconciled)
+			assert.Nil(t, reconciled.BillingUsage)
+			assert.Zero(t, reconciled.PromptTokens)
+			assert.Zero(t, reconciled.CompletionTokens)
+			assert.Zero(t, reconciled.TotalTokens)
+			assert.Equal(t, dto.BillingUsageSemanticAnthropic, reconciled.UsageSemantic)
+			assert.Equal(t, dto.BillingUsageSourceClaudeMessages, reconciled.UsageSource)
+			assert.Equal(t, upstreamUsageReconciliationNotBilled, info.UpstreamUsageReconciliation)
+			assert.Equal(t, int64(84), info.UpstreamUsageLogID)
+			assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
+		})
+	}
+}
+
+func TestReconcileEstimatedTextUsagePrefersConsumeLogOver499(t *testing.T) {
+	originalDelays := upstreamUsageReconcileDelays
+	upstreamUsageReconcileDelays = []time.Duration{0}
+	t.Cleanup(func() {
+		upstreamUsageReconcileDelays = originalDelays
+	})
+
+	const upstreamRequestID = "upstream-request-preferred-consume"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := fmt.Fprintf(w, `{
+			"success": true,
+			"message": "",
+			"data": [
+				{"id": 84, "type": 5, "request_id": %q, "content": "status_code=499", "quota": 0},
+				{"id": 85, "type": 2, "request_id": %q, "prompt_tokens": 121, "completion_tokens": 7, "quota": 5000, "other": "{\"cache_tokens\":0}"}
+			]
+		}`, upstreamRequestID, upstreamRequestID)
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+
+	c, info := newReconcileContext(t, server.URL, upstreamRequestID, 0)
+	reconciled := ReconcileEstimatedTextUsage(c, info, estimatedUsageForSemantic(t, dto.BillingUsageSemanticAnthropic))
+
+	require.NotNil(t, reconciled)
+	require.NotNil(t, reconciled.BillingUsage)
+	assert.False(t, reconciled.BillingUsage.Estimated)
+	assert.Equal(t, 121, reconciled.PromptTokens)
+	assert.Equal(t, 7, reconciled.CompletionTokens)
+	assert.Equal(t, "matched", info.UpstreamUsageReconciliation)
+}

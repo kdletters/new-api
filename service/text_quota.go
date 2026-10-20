@@ -75,6 +75,17 @@ func (s *textQuotaSummary) hasBillableUsage() bool {
 	return s.FixedPriceBilling || s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
 }
 
+func applyNotBilledQuotaOverride(relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary) {
+	if relayInfo == nil || summary == nil || relayInfo.UpstreamUsageReconciliation != upstreamUsageReconciliationNotBilled {
+		return
+	}
+	summary.Quota = 0
+	summary.FixedPriceBilling = false
+	summary.ToolCallSurchargeQuota = decimal.Zero
+	summary.ToolSurchargeItems = nil
+	summary.AudioInputPrice = 0
+}
+
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
 	if summary.CacheCreationTokens5m > 0 || summary.CacheCreationTokens1h > 0 {
 		splitCacheWriteTokens := summary.CacheCreationTokens5m + summary.CacheCreationTokens1h
@@ -430,6 +441,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 	}
 
+	applyNotBilledQuotaOverride(relayInfo, &summary)
+	if relayInfo.UpstreamUsageReconciliation == upstreamUsageReconciliationNotBilled {
+		tieredBillingApplied = false
+	}
+
 	for _, item := range summary.ToolSurchargeItems {
 		q := decimal.NewFromFloat(item.Price).
 			Mul(decimal.NewFromInt(int64(item.Count))).
@@ -449,8 +465,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	if !summary.hasBillableUsage() {
-		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		if relayInfo.UpstreamUsageReconciliation == upstreamUsageReconciliationNotBilled {
+			extraContent = append(extraContent, "上游返回 client cancelled，未产生计费")
+			logger.LogInfo(ctx, fmt.Sprintf("upstream reported client cancellation without billing, userId %d, channelId %d, tokenId %d, model %s", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName))
+		} else {
+			extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
+			logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		}
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)

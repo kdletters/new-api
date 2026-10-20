@@ -1515,3 +1515,22 @@ func TestAppendToolSurchargeLogInfoWritesOnlyStructuredFields(t *testing.T) {
 	assert.NotContains(t, fields, "image_generation_call")
 	assert.NotContains(t, fields, "image_generation_call_price")
 }
+
+func TestApplyNotBilledQuotaOverrideClearsBillableQuota(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{UpstreamUsageReconciliation: upstreamUsageReconciliationNotBilled}
+	summary := textQuotaSummary{
+		Quota:                  12345,
+		FixedPriceBilling:      true,
+		ToolCallSurchargeQuota: decimal.NewFromInt(900),
+		ToolSurchargeItems:     []ToolSurchargeItem{{Name: "web_search", Count: 1, Price: 4}},
+		AudioInputPrice:        2,
+	}
+
+	applyNotBilledQuotaOverride(relayInfo, &summary)
+
+	assert.Zero(t, summary.Quota)
+	assert.False(t, summary.FixedPriceBilling)
+	assert.True(t, summary.ToolCallSurchargeQuota.IsZero())
+	assert.Empty(t, summary.ToolSurchargeItems)
+	assert.Zero(t, summary.AudioInputPrice)
+}

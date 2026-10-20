@@ -27,6 +27,8 @@ const (
 	upstreamTokenUsageLogMaxBodyBytes   = 8 << 20
 	upstreamTokenUsageLogRequestTimeout = 8 * time.Second
 	upstreamUsageReconcileTotalTimeout  = 90 * time.Second
+
+	upstreamUsageReconciliationNotBilled = "not_billed"
 )
 
 var upstreamUsageReconcileDelays = []time.Duration{
@@ -47,6 +49,7 @@ type upstreamTokenUsageLogResponse struct {
 type upstreamTokenUsageLog struct {
 	ID                int64  `json:"id"`
 	Type              int    `json:"type"`
+	Content           string `json:"content"`
 	RequestID         string `json:"request_id"`
 	UpstreamRequestID string `json:"upstream_request_id"`
 	ModelName         string `json:"model_name"`
@@ -113,7 +116,7 @@ func ReconcileEstimatedTextUsage(c *gin.Context, info *relaycommon.RelayInfo, us
 			break
 		}
 
-		entry, err := fetchUpstreamTokenUsageLog(ctx, client, endpoint, info.ApiKey, upstreamRequestID)
+		entries, err := fetchUpstreamTokenUsageLog(ctx, client, endpoint, info.ApiKey, upstreamRequestID)
 		if err != nil {
 			lastErr = err
 			if errors.Is(err, errUpstreamUsageLogEndpointUnavailable) {
@@ -121,7 +124,7 @@ func ReconcileEstimatedTextUsage(c *gin.Context, info *relaycommon.RelayInfo, us
 			}
 			continue
 		}
-		if entry == nil {
+		if len(entries) == 0 {
 			lastErr = nil
 			continue
 		}
@@ -129,27 +132,52 @@ func ReconcileEstimatedTextUsage(c *gin.Context, info *relaycommon.RelayInfo, us
 		if expectedSemantic == "" {
 			expectedSemantic = usage.UsageSemantic
 		}
-		reconciled, ok := upstreamUsageFromTokenLog(entry, expectedSemantic, usage.BillingUsage.Source)
-		if !ok {
-			lastErr = fmt.Errorf("upstream usage log %d has invalid or incomplete usage", entry.ID)
-			continue
+		var cancelledEntry *upstreamTokenUsageLog
+		for i := range entries {
+			entry := &entries[i]
+			if entry.Type == model.LogTypeError {
+				if upstreamLogIsClientCancelled(entry) {
+					cancelledEntry = entry
+				}
+				continue
+			}
+			reconciled, ok := upstreamUsageFromTokenLog(entry, expectedSemantic, usage.BillingUsage.Source)
+			if !ok {
+				continue
+			}
+			info.UpstreamUsageReconciliation = "matched"
+			info.UpstreamUsageLogID = entry.ID
+			info.UpstreamUsageQuota = entry.Quota
+			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
+			logger.LogInfo(c, fmt.Sprintf(
+				"upstream usage reconciled: request_id=%s upstream_log_id=%d upstream_quota=%d prompt_tokens=%d completion_tokens=%d cache_tokens=%d cache_creation_tokens=%d",
+				upstreamRequestID,
+				entry.ID,
+				entry.Quota,
+				reconciled.PromptTokens,
+				reconciled.CompletionTokens,
+				reconciled.PromptTokensDetails.CachedTokens,
+				reconciled.PromptTokensDetails.CachedCreationTokens,
+			))
+			return reconciled
 		}
-
-		info.UpstreamUsageReconciliation = "matched"
-		info.UpstreamUsageLogID = entry.ID
-		info.UpstreamUsageQuota = entry.Quota
-		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
-		logger.LogInfo(c, fmt.Sprintf(
-			"upstream usage reconciled: request_id=%s upstream_log_id=%d upstream_quota=%d prompt_tokens=%d completion_tokens=%d cache_tokens=%d cache_creation_tokens=%d",
-			upstreamRequestID,
-			entry.ID,
-			entry.Quota,
-			reconciled.PromptTokens,
-			reconciled.CompletionTokens,
-			reconciled.PromptTokensDetails.CachedTokens,
-			reconciled.PromptTokensDetails.CachedCreationTokens,
-		))
-		return reconciled
+		if cancelledEntry != nil {
+			reconciled := notBilledUsageForSemantic(expectedSemantic, usage.BillingUsage.Source)
+			if reconciled != nil {
+				info.UpstreamUsageReconciliation = upstreamUsageReconciliationNotBilled
+				info.UpstreamUsageLogID = cancelledEntry.ID
+				info.UpstreamUsageQuota = cancelledEntry.Quota
+				common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
+				logger.LogInfo(c, fmt.Sprintf(
+					"upstream usage not billed: request_id=%s upstream_log_id=%d reason=client_cancelled",
+					upstreamRequestID,
+					cancelledEntry.ID,
+				))
+				return reconciled
+			}
+		}
+		lastErr = fmt.Errorf("upstream usage logs for request %s have no usable usage", upstreamRequestID)
+		continue
 	}
 
 	info.UpstreamUsageReconciliation = "not_found"
@@ -180,7 +208,7 @@ func upstreamTokenUsageLogURL(baseURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func fetchUpstreamTokenUsageLog(ctx context.Context, client *http.Client, endpoint string, apiKey string, requestID string) (*upstreamTokenUsageLog, error) {
+func fetchUpstreamTokenUsageLog(ctx context.Context, client *http.Client, endpoint string, apiKey string, requestID string) ([]upstreamTokenUsageLog, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, upstreamTokenUsageLogRequestTimeout)
 	defer cancel()
 
@@ -230,16 +258,54 @@ func fetchUpstreamTokenUsageLog(ctx context.Context, client *http.Client, endpoi
 	if !payload.Success {
 		return nil, fmt.Errorf("upstream usage log rejected: %s", strings.TrimSpace(payload.Message))
 	}
+	entries := make([]upstreamTokenUsageLog, 0, 2)
 	for i := range payload.Data {
 		entry := &payload.Data[i]
-		if entry.Type != model.LogTypeConsume {
+		if entry.Type != model.LogTypeConsume && entry.Type != model.LogTypeError {
 			continue
 		}
 		if entry.RequestID == requestID || entry.UpstreamRequestID == requestID {
-			return entry, nil
+			entries = append(entries, *entry)
 		}
 	}
-	return nil, nil
+	return entries, nil
+}
+
+func upstreamLogIsClientCancelled(entry *upstreamTokenUsageLog) bool {
+	if entry == nil || entry.Type != model.LogTypeError {
+		return false
+	}
+	if strings.Contains(entry.Content, "status_code=499") {
+		return true
+	}
+	other := upstreamUsageOtherMap(entry.Other)
+	statusCode, ok := upstreamUsageCount(other, "status_code")
+	return ok && statusCode == 499
+}
+
+func notBilledUsageForSemantic(semantic string, source string) *dto.Usage {
+	switch semantic {
+	case dto.BillingUsageSemanticAnthropic:
+		return &dto.Usage{
+			UsageSemantic: semantic,
+			UsageSource:   dto.BillingUsageSourceClaudeMessages,
+		}
+	case dto.BillingUsageSemanticOpenAI:
+		if source == "" {
+			source = dto.BillingUsageSourceOAIChat
+		}
+		return &dto.Usage{
+			UsageSemantic: semantic,
+			UsageSource:   source,
+		}
+	case dto.BillingUsageSemanticGemini:
+		return &dto.Usage{
+			UsageSemantic: semantic,
+			UsageSource:   dto.BillingUsageSourceGeminiChat,
+		}
+	default:
+		return nil
+	}
 }
 
 type upstreamUsageCounts struct {
