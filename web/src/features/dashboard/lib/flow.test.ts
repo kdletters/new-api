@@ -38,6 +38,8 @@ const rows: FlowQuotaDataItem[] = [
     model_name: 'gpt-4.1',
     quota: 100,
     token_used: 40,
+    cache_creation_tokens: 12,
+    cache_read_tokens: 4,
     count: 2,
   },
   {
@@ -52,6 +54,8 @@ const rows: FlowQuotaDataItem[] = [
     model_name: 'gpt-4.1',
     quota: 50,
     token_used: 20,
+    cache_creation_tokens: 8,
+    cache_read_tokens: 6,
     count: 1,
   },
   {
@@ -66,6 +70,8 @@ const rows: FlowQuotaDataItem[] = [
     model_name: 'claude-4-sonnet',
     quota: 70,
     token_used: 30,
+    cache_creation_tokens: 5,
+    cache_read_tokens: 3,
     count: 3,
   },
 ]
@@ -115,6 +121,22 @@ describe('dashboard flow data', () => {
     expect(result.summary.quota).toBe(150)
     expect(result.summary.tokens).toBe(60)
     expect(result.summary.requests).toBe(3)
+    expect(result.summary.cacheCreationTokens).toBe(20)
+    expect(result.summary.cacheReadTokens).toBe(10)
+    expect(
+      result.flow.nodes.find((node) => node.id === 'token:11')
+    ).toMatchObject({
+      cacheCreationTokens: 20,
+      cacheReadTokens: 10,
+    })
+    expect(
+      result.flow.links.find(
+        (link) => link.source === 'token:11' && link.target === 'group:vip'
+      )
+    ).toMatchObject({
+      cacheCreationTokens: 20,
+      cacheReadTokens: 10,
+    })
     expect(
       result.flow.links.map((link) => [link.source, link.target, link.value])
     ).toEqual([
@@ -714,7 +736,11 @@ describe('dashboard flow data', () => {
     expect(values.nodes.length).toBe(6)
     expect(values.links.length).toBe(5)
     expect(aliceNode.name).toBe('alice')
+    expect(aliceNode.cacheCreationTokens).toBe(12)
+    expect(aliceNode.cacheReadTokens).toBe(4)
     expect(userNodeLink.linkColor).toMatch(/^rgba\(/)
+    expect(userNodeLink.cacheCreationTokens).toBe(12)
+    expect(userNodeLink.cacheReadTokens).toBe(4)
 
     const tooltipRows = flowSpec.tooltip.mark.content
     expect(
@@ -733,9 +759,40 @@ describe('dashboard flow data', () => {
     ).toEqual([
       ['Quota', '100'],
       ['Tokens', '40'],
+      ['Cache Creation', '12'],
+      ['Cache Read', '4'],
       ['Requests', '2'],
       ['Share', '100.0%'],
     ])
+  })
+
+  test('hides zero cache token tooltip rows', () => {
+    const result = buildDashboardFlowData(
+      [
+        {
+          ...rows[0],
+          cache_creation_tokens: 0,
+          cache_read_tokens: 0,
+        },
+      ],
+      'quota',
+      { role: 'root' }
+    )
+    const flowSpec = buildFlowSankeySpec(result.flow, 'Flow')
+    const userNodeLink = flowSpec.data[0].values[0].links.find(
+      (link: Record<string, unknown>) =>
+        link.source === 'user:1' && link.target === 'node:node-a'
+    )
+    const visibleTooltipKeys = flowSpec.tooltip.mark.content
+      .filter((row: Record<string, unknown>) =>
+        typeof row.visible === 'function'
+          ? row.visible({ datum: userNodeLink })
+          : true
+      )
+      .map((row: Record<string, unknown>) => row.key)
+
+    expect(visibleTooltipKeys).not.toContain('Cache Creation')
+    expect(visibleTooltipKeys).not.toContain('Cache Read')
   })
 
   test('maps active flow highlight states into the Sankey spec', () => {

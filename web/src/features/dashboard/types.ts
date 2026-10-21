@@ -29,6 +29,8 @@ export interface QuotaDataItem {
   model_name?: string
   created_at: number
   token_used?: number
+  cache_creation_tokens?: number
+  cache_read_tokens?: number
   count?: number
   quota?: number
 }
@@ -44,6 +46,8 @@ export interface FlowQuotaDataItem {
   channel_name?: string
   model_name?: string
   token_used?: number
+  cache_creation_tokens?: number
+  cache_read_tokens?: number
   count?: number
   quota?: number
 }
@@ -100,6 +104,8 @@ export interface DashboardFlowNode {
   requests: number
   quota: number
   tokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
   color: string
   colorKey: string
   highlighted?: boolean
@@ -113,6 +119,8 @@ export interface DashboardFlowLink {
   requests: number
   quota: number
   tokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
   sourceLabel: string
   targetLabel: string
   color: string
@@ -156,6 +164,8 @@ export interface FlowSummary {
   quota: number
   tokens: number
   requests: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
 }
 
 export interface ProcessedFlowData {

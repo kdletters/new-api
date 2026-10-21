@@ -41,12 +41,16 @@ type VChartSpec = Record<string, any>
 type FlowMetrics = {
   quota: number
   tokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
   requests: number
 }
 
 type FlowSankeyLabels = {
   quota: string
   tokens: string
+  cacheCreation: string
+  cacheRead: string
   requests: string
   share: string
 }
@@ -94,6 +98,8 @@ const DEFAULT_FLOW_OVERFLOW_MODE: FlowOverflowMode = 'aggregate'
 const DEFAULT_FLOW_SANKEY_LABELS: FlowSankeyLabels = {
   quota: 'Quota',
   tokens: 'Tokens',
+  cacheCreation: 'Cache Creation',
+  cacheRead: 'Cache Read',
   requests: 'Requests',
   share: 'Share',
 }
@@ -157,6 +163,8 @@ function rowMetrics(row: FlowQuotaDataItem): FlowMetrics {
   return {
     quota: numberValue(row.quota),
     tokens: numberValue(row.token_used),
+    cacheCreationTokens: numberValue(row.cache_creation_tokens),
+    cacheReadTokens: numberValue(row.cache_read_tokens),
     requests: numberValue(row.count),
   }
 }
@@ -425,6 +433,8 @@ function addNode(
     requests: 0,
     quota: 0,
     tokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
     color,
     colorKey,
   }
@@ -432,6 +442,8 @@ function addNode(
   previous.requests += metrics.requests
   previous.quota += metrics.quota
   previous.tokens += metrics.tokens
+  previous.cacheCreationTokens += metrics.cacheCreationTokens
+  previous.cacheReadTokens += metrics.cacheReadTokens
   map.set(pathNode.id, previous)
 }
 
@@ -452,6 +464,8 @@ function addLink(
     requests: 0,
     quota: 0,
     tokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
     sourceLabel: source.label,
     targetLabel: target.label,
     color,
@@ -465,6 +479,8 @@ function addLink(
   previous.requests += metrics.requests
   previous.quota += metrics.quota
   previous.tokens += metrics.tokens
+  previous.cacheCreationTokens += metrics.cacheCreationTokens
+  previous.cacheReadTokens += metrics.cacheReadTokens
   map.set(key, previous)
 }
 
@@ -526,12 +542,16 @@ function buildSummary(rows: FlowQuotaDataItem[]): FlowSummary {
       const metrics = rowMetrics(row)
       summary.quota += metrics.quota
       summary.tokens += metrics.tokens
+      summary.cacheCreationTokens += metrics.cacheCreationTokens
+      summary.cacheReadTokens += metrics.cacheReadTokens
       summary.requests += metrics.requests
       return summary
     },
     {
       quota: 0,
       tokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
       requests: 0,
     }
   )
@@ -1102,6 +1122,20 @@ function tooltipMetricLines(
         formattedNumber(datum, 'tokens'),
     },
     {
+      key: labels.cacheCreation,
+      value: (datum: Record<string, unknown>) =>
+        formattedNumber(datum, 'cacheCreationTokens'),
+      visible: (datum: Record<string, unknown>) =>
+        hasMetric(datum, 'cacheCreationTokens'),
+    },
+    {
+      key: labels.cacheRead,
+      value: (datum: Record<string, unknown>) =>
+        formattedNumber(datum, 'cacheReadTokens'),
+      visible: (datum: Record<string, unknown>) =>
+        hasMetric(datum, 'cacheReadTokens'),
+    },
+    {
       key: labels.requests,
       value: (datum: Record<string, unknown>) =>
         formattedNumber(datum, 'requests'),
@@ -1137,6 +1171,8 @@ export function buildFlowSankeySpec(
               requests: node.requests,
               quota: node.quota,
               tokens: node.tokens,
+              cacheCreationTokens: node.cacheCreationTokens,
+              cacheReadTokens: node.cacheReadTokens,
               color: node.color,
               colorKey: node.colorKey,
               highlighted: node.highlighted,
@@ -1163,6 +1199,8 @@ export function buildFlowSankeySpec(
                   requests: link.requests,
                   quota: link.quota,
                   tokens: link.tokens,
+                  cacheCreationTokens: link.cacheCreationTokens,
+                  cacheReadTokens: link.cacheReadTokens,
                   color: link.color,
                   linkColor: link.linkColor,
                   linkAlpha: link.linkAlpha,

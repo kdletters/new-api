@@ -8,18 +8,20 @@ import (
 )
 
 type FlowQuotaData struct {
-	UserID      int    `json:"user_id,omitempty" gorm:"column:user_id"`
-	Username    string `json:"username,omitempty" gorm:"column:username"`
-	NodeName    string `json:"node_name,omitempty" gorm:"column:node_name"`
-	TokenID     int    `json:"token_id,omitempty" gorm:"column:token_id"`
-	TokenName   string `json:"token_name,omitempty" gorm:"-"`
-	UseGroup    string `json:"use_group" gorm:"column:use_group"`
-	ChannelID   int    `json:"channel_id,omitempty" gorm:"column:channel_id"`
-	ChannelName string `json:"channel_name,omitempty" gorm:"-"`
-	ModelName   string `json:"model_name" gorm:"column:model_name"`
-	TokenUsed   int    `json:"token_used" gorm:"column:token_used"`
-	Count       int    `json:"count" gorm:"column:count"`
-	Quota       int    `json:"quota" gorm:"column:quota"`
+	UserID              int    `json:"user_id,omitempty" gorm:"column:user_id"`
+	Username            string `json:"username,omitempty" gorm:"column:username"`
+	NodeName            string `json:"node_name,omitempty" gorm:"column:node_name"`
+	TokenID             int    `json:"token_id,omitempty" gorm:"column:token_id"`
+	TokenName           string `json:"token_name,omitempty" gorm:"-"`
+	UseGroup            string `json:"use_group" gorm:"column:use_group"`
+	ChannelID           int    `json:"channel_id,omitempty" gorm:"column:channel_id"`
+	ChannelName         string `json:"channel_name,omitempty" gorm:"-"`
+	ModelName           string `json:"model_name" gorm:"column:model_name"`
+	TokenUsed           int    `json:"token_used" gorm:"column:token_used"`
+	CacheCreationTokens int    `json:"cache_creation_tokens" gorm:"column:cache_creation_tokens"`
+	CacheReadTokens     int    `json:"cache_read_tokens" gorm:"column:cache_read_tokens"`
+	Count               int    `json:"count" gorm:"column:count"`
+	Quota               int    `json:"quota" gorm:"column:quota"`
 }
 
 func GetFlowQuotaData(startTime int64, endTime int64, username string, userID int, role int) ([]*FlowQuotaData, error) {
@@ -43,7 +45,7 @@ func flowQuotaBaseQuery(startTime int64, endTime int64) *gorm.DB {
 func getSelfFlowQuotaData(startTime int64, endTime int64, userID int) ([]*FlowQuotaData, error) {
 	rows := make([]*FlowQuotaData, 0)
 	err := flowQuotaBaseQuery(startTime, endTime).
-		Select("token_id, use_group, model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("token_id, use_group, model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_creation_tokens) as cache_creation_tokens, sum(cache_read_tokens) as cache_read_tokens").
 		Where("user_id = ?", userID).
 		Group("token_id, use_group, model_name").
 		Order("quota DESC").
@@ -57,7 +59,7 @@ func getSelfFlowQuotaData(startTime int64, endTime int64, userID int) ([]*FlowQu
 func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
 	rows := make([]*FlowQuotaData, 0)
 	query := flowQuotaBaseQuery(startTime, endTime).
-		Select("user_id, username, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
+		Select("user_id, username, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_creation_tokens) as cache_creation_tokens, sum(cache_read_tokens) as cache_read_tokens")
 	if username != "" {
 		query = query.Where("username = ?", username)
 	}
@@ -74,7 +76,7 @@ func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*
 func getRootFlowQuotaData(startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
 	rows := make([]*FlowQuotaData, 0)
 	query := flowQuotaBaseQuery(startTime, endTime).
-		Select("user_id, username, node_name, token_id, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
+		Select("user_id, username, node_name, token_id, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_creation_tokens) as cache_creation_tokens, sum(cache_read_tokens) as cache_read_tokens")
 	if username != "" {
 		query = query.Where("username = ?", username)
 	}
