@@ -145,6 +145,12 @@ func ReconcileEstimatedTextUsage(c *gin.Context, info *relaycommon.RelayInfo, us
 			if !ok {
 				continue
 			}
+			if upstreamConsumeLogIsUnbilledClientCancellation(info, entry) {
+				if notBilled := notBilledUsageForSemantic(expectedSemantic, usage.BillingUsage.Source); notBilled != nil {
+					markUpstreamUsageNotBilled(c, info, upstreamRequestID, entry, "client_cancelled_zero_quota")
+					return notBilled
+				}
+			}
 			info.UpstreamUsageReconciliation = "matched"
 			info.UpstreamUsageLogID = entry.ID
 			info.UpstreamUsageQuota = entry.Quota
@@ -164,15 +170,7 @@ func ReconcileEstimatedTextUsage(c *gin.Context, info *relaycommon.RelayInfo, us
 		if cancelledEntry != nil {
 			reconciled := notBilledUsageForSemantic(expectedSemantic, usage.BillingUsage.Source)
 			if reconciled != nil {
-				info.UpstreamUsageReconciliation = upstreamUsageReconciliationNotBilled
-				info.UpstreamUsageLogID = cancelledEntry.ID
-				info.UpstreamUsageQuota = cancelledEntry.Quota
-				common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
-				logger.LogInfo(c, fmt.Sprintf(
-					"upstream usage not billed: request_id=%s upstream_log_id=%d reason=client_cancelled",
-					upstreamRequestID,
-					cancelledEntry.ID,
-				))
+				markUpstreamUsageNotBilled(c, info, upstreamRequestID, cancelledEntry, "client_cancelled")
 				return reconciled
 			}
 		}
@@ -281,6 +279,35 @@ func upstreamLogIsClientCancelled(entry *upstreamTokenUsageLog) bool {
 	other := upstreamUsageOtherMap(entry.Other)
 	statusCode, ok := upstreamUsageCount(other, "status_code")
 	return ok && statusCode == 499
+}
+
+// A New API-compatible upstream can persist a zero-quota consume row after the
+// client cancels before any SSE data arrives. That row's prompt_tokens are a
+// fallback estimate, not billable usage, so settling it would turn a cancelled
+// request into a charge that the upstream never incurred.
+func upstreamConsumeLogIsUnbilledClientCancellation(info *relaycommon.RelayInfo, entry *upstreamTokenUsageLog) bool {
+	if info == nil || entry == nil || entry.Type != model.LogTypeConsume {
+		return false
+	}
+	if entry.Quota != 0 || entry.CompletionTokens != 0 || info.ReceivedResponseCount != 0 {
+		return false
+	}
+	return info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone
+}
+
+func markUpstreamUsageNotBilled(c *gin.Context, info *relaycommon.RelayInfo, upstreamRequestID string, entry *upstreamTokenUsageLog, reason string) {
+	info.UpstreamUsageReconciliation = upstreamUsageReconciliationNotBilled
+	info.UpstreamUsageLogID = entry.ID
+	info.UpstreamUsageQuota = entry.Quota
+	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
+	logger.LogInfo(c, fmt.Sprintf(
+		"upstream usage not billed: request_id=%s upstream_log_id=%d reason=%s prompt_tokens=%d completion_tokens=%d",
+		upstreamRequestID,
+		entry.ID,
+		reason,
+		entry.PromptTokens,
+		entry.CompletionTokens,
+	))
 }
 
 func notBilledUsageForSemantic(semantic string, source string) *dto.Usage {

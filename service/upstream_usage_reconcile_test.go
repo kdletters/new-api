@@ -310,6 +310,50 @@ func TestReconcileEstimatedTextUsageTreatsUpstream499AsNotBilled(t *testing.T) {
 	}
 }
 
+func TestReconcileEstimatedTextUsageTreatsZeroQuotaClientCancelledConsumeAsNotBilled(t *testing.T) {
+	originalDelays := upstreamUsageReconcileDelays
+	upstreamUsageReconcileDelays = []time.Duration{0}
+	t.Cleanup(func() {
+		upstreamUsageReconcileDelays = originalDelays
+	})
+
+	const upstreamRequestID = "upstream-request-client-cancelled-zero-quota"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := fmt.Fprintf(w, `{
+			"success": true,
+			"message": "",
+			"data": [{
+				"id": 85,
+				"type": 2,
+				"request_id": %q,
+				"prompt_tokens": 3303050,
+				"completion_tokens": 0,
+				"quota": 0,
+				"is_stream": true,
+				"other": "{\"cache_tokens\":0,\"cache_creation_tokens\":0,\"usage_semantic\":\"anthropic\"}"
+			}]
+		}`, upstreamRequestID)
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+
+	c, info := newReconcileContext(t, server.URL, upstreamRequestID, 0)
+	reconciled := ReconcileEstimatedTextUsage(c, info, estimatedUsageForSemantic(t, dto.BillingUsageSemanticAnthropic))
+
+	require.NotNil(t, reconciled)
+	assert.Nil(t, reconciled.BillingUsage)
+	assert.Zero(t, reconciled.PromptTokens)
+	assert.Zero(t, reconciled.CompletionTokens)
+	assert.Zero(t, reconciled.TotalTokens)
+	assert.Equal(t, dto.BillingUsageSemanticAnthropic, reconciled.UsageSemantic)
+	assert.Equal(t, dto.BillingUsageSourceClaudeMessages, reconciled.UsageSource)
+	assert.Equal(t, upstreamUsageReconciliationNotBilled, info.UpstreamUsageReconciliation)
+	assert.Equal(t, int64(85), info.UpstreamUsageLogID)
+	assert.Zero(t, info.UpstreamUsageQuota)
+	assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
+}
+
 func TestReconcileEstimatedTextUsagePrefersConsumeLogOver499(t *testing.T) {
 	originalDelays := upstreamUsageReconcileDelays
 	upstreamUsageReconcileDelays = []time.Duration{0}
