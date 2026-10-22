@@ -3439,6 +3439,7 @@
     "MiniMax": "MiniMax",
     "Minimum {{amount}}": "Tối thiểu {{amount}}",
     "Minimum check-in quota": "Hạn ngạch điểm danh tối thiểu",
+    "Minimum cost ({{currency}})": "Chi phí tối thiểu ({{currency}})",
     "Minimum LinuxDO trust level required": "Yêu cầu mức độ tin cậy {{LinuxDO}} tối thiểu",
     "Minimum quota amount awarded for check-in": "Số lượng hạn ngạch tối thiểu được trao cho điểm danh",
     "Minimum recharge amount in USD": "Số tiền nạp tối thiểu bằng USD",

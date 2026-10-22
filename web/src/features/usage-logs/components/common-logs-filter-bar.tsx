@@ -20,7 +20,7 @@ import { useQueryClient, useIsFetching, useQuery } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import type { Table } from '@tanstack/react-table'
 import { Eye, EyeOff } from 'lucide-react'
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
@@ -42,7 +42,10 @@ import {
 import { getGroups } from '@/features/users/api'
 import { useMediaQuery } from '@/hooks'
 import { getUserGroups } from '@/lib/api'
+import { getCurrencyLabel } from '@/lib/currency'
+import { quotaUnitsToEditableAmount } from '@/lib/format'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
@@ -58,6 +61,10 @@ import {
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
+const MINIMUM_COST_FORMAT_OPTIONS = {
+  digitsLarge: 4,
+  digitsSmall: 6,
+} as const
 
 type LogTypeValue = (typeof LOG_TYPE_FILTERS)[number]['value']
 const logTypeValueSet = new Set<string>(
@@ -93,6 +100,7 @@ function buildSearchSourceKey(values: {
   username?: unknown
   requestId?: unknown
   upstreamRequestId?: unknown
+  minQuota?: unknown
   type?: unknown
 }) {
   return [
@@ -105,6 +113,7 @@ function buildSearchSourceKey(values: {
     values.username,
     values.requestId,
     values.upstreamRequestId,
+    values.minQuota,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
   ]
     .map((value) => String(value ?? ''))
@@ -125,6 +134,7 @@ export function CommonLogsFilterBar<TData>(
   const searchParams = route.useSearch()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
+  const currency = useSystemConfigStore((state) => state.config.currency)
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
   const { data: adminGroups } = useQuery({
     queryKey: ['groups'],
@@ -144,6 +154,14 @@ export function CommonLogsFilterBar<TData>(
       .filter((group) => group !== 'auto')
       .map((group) => ({ label: group, value: group }))
   }, [isAdmin, adminGroups, userGroups])
+  const currencySourceKey = [
+    currency.displayInCurrency,
+    currency.quotaDisplayType,
+    currency.quotaPerUnit,
+    currency.usdExchangeRate,
+    currency.customCurrencySymbol,
+    currency.customCurrencyExchangeRate,
+  ].join('\u001f')
 
   const searchState = useMemo<CommonLogDraft>(() => {
     const { start, end } = getDefaultTimeRange()
@@ -157,8 +175,10 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username,
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
+      minQuota: searchParams.minQuota,
       type: searchParams.type,
     }
+    const restoredMinQuota = Number(searchParams.minQuota)
     const filters: CommonLogFilters = {
       startTime: searchParams.startTime
         ? new Date(searchParams.startTime)
@@ -171,6 +191,17 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
+      minCost:
+        currency.quotaPerUnit > 0 &&
+        Number.isSafeInteger(restoredMinQuota) &&
+        restoredMinQuota > 0
+          ? String(
+              quotaUnitsToEditableAmount(
+                restoredMinQuota,
+                MINIMUM_COST_FORMAT_OPTIONS
+              )
+            )
+          : undefined,
     }
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
@@ -187,9 +218,22 @@ export function CommonLogsFilterBar<TData>(
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
+    searchParams.minQuota,
     searchParams.type,
+    currency,
   ])
   const [draft, setDraft] = useState<CommonLogDraft>(() => searchState)
+  const restoredMinCost = searchState.filters.minCost
+  useEffect(() => {
+    setDraft((current) => {
+      if (current.sourceKey !== searchState.sourceKey) return current
+      if (current.filters.minCost === restoredMinCost) return current
+      return {
+        ...current,
+        filters: { ...current.filters, minCost: restoredMinCost },
+      }
+    })
+  }, [currencySourceKey, restoredMinCost, searchState.sourceKey])
   const activeDraft =
     draft.sourceKey === searchState.sourceKey ? draft : searchState
   const filters = activeDraft.filters
@@ -261,12 +305,14 @@ export function CommonLogsFilterBar<TData>(
     [handleApply]
   )
 
+  const hasMinimumCostFilter = Number(filters.minCost) > 0
   const hasExpandedFilters =
     !!filters.token ||
     !!filters.username ||
     !!filters.channel ||
     !!filters.requestId ||
-    !!filters.upstreamRequestId
+    !!filters.upstreamRequestId ||
+    hasMinimumCostFilter
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -278,7 +324,17 @@ export function CommonLogsFilterBar<TData>(
     isAdmin ? filters.channel : undefined,
     filters.requestId,
     filters.upstreamRequestId,
+    hasMinimumCostFilter,
   ].filter(Boolean).length
+  const currencyLabel = getCurrencyLabel()
+  const minimumCostStep = quotaUnitsToEditableAmount(
+    1,
+    MINIMUM_COST_FORMAT_OPTIONS
+  )
+  const maximumCost = quotaUnitsToEditableAmount(
+    Number.MAX_SAFE_INTEGER,
+    MINIMUM_COST_FORMAT_OPTIONS
+  )
   const sensitiveInputClass = sensitiveVisible
     ? undefined
     : '[-webkit-text-security:disc]'
@@ -434,6 +490,24 @@ export function CommonLogsFilterBar<TData>(
   )
   const advancedFilters = (
     <>
+      <LogsFilterField>
+        <LogsFilterInput
+          type='number'
+          min={minimumCostStep}
+          max={maximumCost}
+          step={minimumCostStep}
+          inputMode='decimal'
+          aria-label={t('Minimum cost ({{currency}})', {
+            currency: currencyLabel,
+          })}
+          placeholder={t('Minimum cost ({{currency}})', {
+            currency: currencyLabel,
+          })}
+          value={filters.minCost ?? ''}
+          onChange={(e) => handleChange('minCost', e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+      </LogsFilterField>
       <LogsFilterField>
         <LogsFilterInput
           placeholder={t('Token Name')}

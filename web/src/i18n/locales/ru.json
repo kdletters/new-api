@@ -3439,6 +3439,7 @@
     "MiniMax": "MiniMax",
     "Minimum {{amount}}": "Минимум {{amount}}",
     "Minimum check-in quota": "Минимальная квота регистрации",
+    "Minimum cost ({{currency}})": "Минимальная стоимость ({{currency}})",
     "Minimum LinuxDO trust level required": "Требуемый минимальный уровень доверия LinuxDO",
     "Minimum quota amount awarded for check-in": "Минимальная сумма квоты, присуждаемая за регистрацию",
     "Minimum recharge amount in USD": "Минимальная сумма пополнения в USD",

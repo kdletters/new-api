@@ -23,6 +23,7 @@ import {
   formatQuotaWithCurrency,
   getCurrencyDisplay,
   getCurrencyFractionDigits,
+  type CurrencyFormatOptions,
 } from './currency'
 
 // ============================================================================
@@ -122,9 +123,12 @@ function quotaUnitsToDisplayAmount(
 
 /**
  * Convert quota units to a plain number suitable for an editable input.
- * Uses the same precision as quota list formatting without symbols or suffixes.
+ * Uses quota list formatting unless explicit precision options are provided.
  */
-export function quotaUnitsToEditableAmount(units: number): number {
+export function quotaUnitsToEditableAmount(
+  units: number,
+  options?: CurrencyFormatOptions
+): number {
   const { config, meta } = getCurrencyDisplay()
   const amount = quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
 
@@ -132,17 +136,17 @@ export function quotaUnitsToEditableAmount(units: number): number {
     return Math.round(amount)
   }
 
-  return Number(amount.toFixed(getCurrencyFractionDigits(amount)))
+  return Number(amount.toFixed(getCurrencyFractionDigits(amount, options)))
 }
 
 /** Return the input step matching the configured editable quota precision. */
-export function getEditableQuotaStep(): number {
+export function getEditableQuotaStep(options?: CurrencyFormatOptions): number {
   const { meta } = getCurrencyDisplay()
   if (meta.kind === 'tokens') {
     return 1
   }
 
-  return 10 ** -getCurrencyFractionDigits(0)
+  return 10 ** -getCurrencyFractionDigits(0, options)
 }
 
 // ============================================================================

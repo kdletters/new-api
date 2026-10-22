@@ -3439,6 +3439,7 @@
     "MiniMax": "MiniMax",
     "Minimum {{amount}}": "最小 {{amount}}",
     "Minimum check-in quota": "最小チェックインクォータ",
+    "Minimum cost ({{currency}})": "最低費用（{{currency}}）",
     "Minimum LinuxDO trust level required": "必要な最小LinuxDOトラストレベル",
     "Minimum quota amount awarded for check-in": "チェックインで付与される最小クォータ量",
     "Minimum recharge amount in USD": "米ドルでの最小リチャージ額",

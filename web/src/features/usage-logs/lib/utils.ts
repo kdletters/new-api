@@ -180,6 +180,7 @@ export function buildApiParams(config: {
   }
 
   // Build base params from search params
+  const minQuota = Number(searchParams.minQuota)
   const params: GetLogsParams = {
     p: page,
     page_size: pageSize,
@@ -198,6 +199,9 @@ export function buildApiParams(config: {
       : {}),
     ...(searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
+      : {}),
+    ...(Number.isInteger(minQuota) && minQuota > 0
+      ? { min_quota: minQuota }
       : {}),
     ...buildTimeRangeParams(searchParams, false),
   }

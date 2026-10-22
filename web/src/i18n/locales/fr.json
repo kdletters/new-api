@@ -3439,6 +3439,7 @@
     "MiniMax": "MiniMax",
     "Minimum {{amount}}": "Minimum {{amount}}",
     "Minimum check-in quota": "Quota minimum de connexion",
+    "Minimum cost ({{currency}})": "Coût minimum ({{currency}})",
     "Minimum LinuxDO trust level required": "Niveau de confiance minimum LinuxDO requis",
     "Minimum quota amount awarded for check-in": "Montant minimum de quota attribué pour la connexion",
     "Minimum recharge amount in USD": "Montant de recharge minimum en USD",

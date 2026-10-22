@@ -3439,6 +3439,7 @@
     "MiniMax": "MiniMax",
     "Minimum {{amount}}": "最低 {{amount}}",
     "Minimum check-in quota": "签到最小额度",
+    "Minimum cost ({{currency}})": "最低费用（{{currency}}）",
     "Minimum LinuxDO trust level required": "所需的最低 LinuxDO 信任级别",
     "Minimum quota amount awarded for check-in": "签到奖励的最小额度",
     "Minimum recharge amount in USD": "最低充值金额（美元）",

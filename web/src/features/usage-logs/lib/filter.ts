@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Utility functions for usage logs filters
  */
+import { parseQuotaFromDollars } from '@/lib/format'
+
 import { LOG_CATEGORY_LABELS } from '../constants'
 import type {
   LogCategory,
@@ -48,6 +50,8 @@ export function buildSearchParams(
   switch (logCategory) {
     case 'common': {
       const commonFilters = filters as CommonLogFilters
+      const minimumCost = Number(commonFilters.minCost)
+      const minQuota = parseQuotaFromDollars(minimumCost)
       return {
         ...baseParams,
         ...(commonFilters.model && { model: commonFilters.model }),
@@ -58,6 +62,10 @@ export function buildSearchParams(
         ...(commonFilters.upstreamRequestId && {
           upstreamRequestId: commonFilters.upstreamRequestId,
         }),
+        ...(Number.isFinite(minimumCost) &&
+          minimumCost > 0 &&
+          Number.isSafeInteger(minQuota) &&
+          minQuota > 0 && { minQuota }),
       }
     }
     case 'drawing': {

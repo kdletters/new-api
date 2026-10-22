@@ -3,12 +3,27 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )
+
+func parseMinQuotaQuery(c *gin.Context) (int, bool) {
+	rawMinQuota := strings.TrimSpace(c.Query("min_quota"))
+	if rawMinQuota == "" {
+		return 0, true
+	}
+	minQuota, err := strconv.Atoi(rawMinQuota)
+	if err != nil || minQuota < 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return 0, false
+	}
+	return minQuota, true
+}
 
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
@@ -22,7 +37,11 @@ func GetAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId)
+	minQuota, ok := parseMinQuotaQuery(c)
+	if !ok {
+		return
+	}
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, minQuota)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -49,7 +68,11 @@ func GetUserLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	minQuota, ok := parseMinQuotaQuery(c)
+	if !ok {
+		return
+	}
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, minQuota)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -116,7 +139,11 @@ func GetLogsStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	minQuota, ok := parseMinQuotaQuery(c)
+	if !ok {
+		return
+	}
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, minQuota)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -143,7 +170,11 @@ func GetLogsSelfStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	minQuota, ok := parseMinQuotaQuery(c)
+	if !ok {
+		return
+	}
+	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, minQuota)
 	if err != nil {
 		common.ApiError(c, err)
 		return
