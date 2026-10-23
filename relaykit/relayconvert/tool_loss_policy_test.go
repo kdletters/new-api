@@ -1,6 +1,7 @@
 package relayconvert
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -10,6 +11,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func rawToolSchema(t *testing.T, schema map[string]any) json.RawMessage {
+	t.Helper()
+	encoded, err := kitutil.Marshal(schema)
+	require.NoError(t, err)
+	return encoded
+}
 
 func TestConvertRequestDefaultPolicyAllowsGeminiCodeExecution(t *testing.T) {
 	t.Parallel()
@@ -115,22 +123,22 @@ func TestNormalizeClaudeToolInputSchemas(t *testing.T) {
 	}{
 		{
 			name:     "converted pointer tool",
-			tools:    []any{&dto.Tool{Name: "converted", InputSchema: unionSchema()}},
+			tools:    []any{&dto.Tool{Name: "converted", InputSchema: rawToolSchema(t, unionSchema())}},
 			wantName: "converted",
 		},
 		{
 			name:     "converted value tool",
-			tools:    []any{dto.Tool{Name: "value", InputSchema: unionSchema()}},
+			tools:    []any{dto.Tool{Name: "value", InputSchema: rawToolSchema(t, unionSchema())}},
 			wantName: "value",
 		},
 		{
 			name:     "typed pointer tool slice",
-			tools:    []*dto.Tool{{Name: "typed", InputSchema: unionSchema()}},
+			tools:    []*dto.Tool{{Name: "typed", InputSchema: rawToolSchema(t, unionSchema())}},
 			wantName: "typed",
 		},
 		{
 			name:     "value tool slice",
-			tools:    []dto.Tool{{Name: "value-slice", InputSchema: unionSchema()}},
+			tools:    []dto.Tool{{Name: "value-slice", InputSchema: rawToolSchema(t, unionSchema())}},
 			wantName: "value-slice",
 		},
 		{
@@ -190,7 +198,7 @@ func TestNormalizeClaudeToolInputSchemasSkipsUnchangedTools(t *testing.T) {
 		},
 		{
 			name:  "union-free schema",
-			tools: []any{&dto.Tool{Name: "flat", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"type": "string"}}}}},
+			tools: []any{&dto.Tool{Name: "flat", InputSchema: rawToolSchema(t, map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"type": "string"}}})}},
 		},
 	}
 
@@ -208,16 +216,36 @@ func toolSchemaByName(t *testing.T, tools any, name string) map[string]any {
 	t.Helper()
 
 	switch typed := tools.(type) {
+	case json.RawMessage:
+		var rawTools []json.RawMessage
+		require.NoError(t, kitutil.Unmarshal(typed, &rawTools))
+		for _, rawTool := range rawTools {
+			var tool struct {
+				Name        string          `json:"name"`
+				InputSchema json.RawMessage `json:"input_schema"`
+			}
+			require.NoError(t, kitutil.Unmarshal(rawTool, &tool))
+			if tool.Name != name {
+				continue
+			}
+			var schema map[string]any
+			require.NoError(t, kitutil.Unmarshal(tool.InputSchema, &schema))
+			return schema
+		}
 	case []any:
 		for _, item := range typed {
 			switch tool := item.(type) {
 			case *dto.Tool:
 				if tool.Name == name {
-					return tool.InputSchema
+					var schema map[string]any
+					require.NoError(t, kitutil.Unmarshal(tool.InputSchema, &schema))
+					return schema
 				}
 			case dto.Tool:
 				if tool.Name == name {
-					return tool.InputSchema
+					var schema map[string]any
+					require.NoError(t, kitutil.Unmarshal(tool.InputSchema, &schema))
+					return schema
 				}
 			case map[string]any:
 				if toolName, _ := tool["name"].(string); toolName == name {
@@ -229,13 +257,17 @@ func toolSchemaByName(t *testing.T, tools any, name string) map[string]any {
 	case []*dto.Tool:
 		for _, tool := range typed {
 			if tool != nil && tool.Name == name {
-				return tool.InputSchema
+				var schema map[string]any
+				require.NoError(t, kitutil.Unmarshal(tool.InputSchema, &schema))
+				return schema
 			}
 		}
 	case []dto.Tool:
 		for i := range typed {
 			if typed[i].Name == name {
-				return typed[i].InputSchema
+				var schema map[string]any
+				require.NoError(t, kitutil.Unmarshal(typed[i].InputSchema, &schema))
+				return schema
 			}
 		}
 	}

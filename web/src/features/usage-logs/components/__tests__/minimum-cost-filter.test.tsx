@@ -58,6 +58,19 @@ async function renderFilter(initialEntry = '/usage-logs/common') {
     if (url === '/api/user/self/groups') {
       return { data: { success: true, data: {} } }
     }
+    if (url === '/api/status') {
+      return {
+        data: {
+          success: true,
+          data: {
+            display_in_currency: true,
+            quota_display_type: 'CNY',
+            quota_per_unit: 500000,
+            usd_exchange_rate: 7,
+          },
+        },
+      }
+    }
     return { data: { success: true, data: { quota: 0, rpm: 0, tpm: 0 } } }
   })
 
@@ -87,23 +100,41 @@ async function renderFilter(initialEntry = '/usage-logs/common') {
     </QueryClientProvider>
   )
   await screen.findByRole('button', { name: /^Expand/ })
+  await waitFor(() =>
+    expect(
+      useSystemConfigStore.getState().config.currency.quotaDisplayType
+    ).toBe('CNY')
+  )
   return router
 }
 
-beforeEach(() => {
-  useSystemConfigStore.setState(useSystemConfigStore.getInitialState(), true)
-  useSystemConfigStore.getState().setConfig({
-    currency: {
-      ...DEFAULT_CURRENCY_CONFIG,
-      quotaDisplayType: 'CNY',
-      usdExchangeRate: 7,
-    },
-  })
+beforeEach(async () => {
+  const originalMatchMedia = window.matchMedia
+  vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+    ...originalMatchMedia(query),
+    matches: false,
+  }))
+  localStorage.clear()
+  await useSystemConfigStore.persist.rehydrate()
+  useSystemConfigStore.setState(
+    (state) => ({
+      config: {
+        ...state.config,
+        currency: {
+          ...DEFAULT_CURRENCY_CONFIG,
+          quotaDisplayType: 'CNY',
+          usdExchangeRate: 7,
+        },
+      },
+    }),
+    false
+  )
 })
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  localStorage.clear()
   useSystemConfigStore.setState(useSystemConfigStore.getInitialState(), true)
 })
 
@@ -112,11 +143,11 @@ it('restores and submits a four-decimal CNY amount without double conversion', a
   const router = await renderFilter(
     '/usage-logs/common?page=3&minQuota=5018207'
   )
-  await user.click(screen.getByRole('button', { name: /^Expand/ }))
+  const expandButton = screen.getByRole('button', { name: /^Expand/ })
+  await user.click(expandButton)
+  expect(expandButton).toHaveAttribute('aria-expanded', 'true')
 
-  const input = screen.getByRole('spinbutton', {
-    name: 'Minimum cost (CNY)',
-  })
+  const input = screen.getByLabelText('Minimum cost (CNY)')
   expect(input).toHaveValue(70.2549)
 
   await user.clear(input)
@@ -139,9 +170,7 @@ it('reconverts the minimum cost without dropping other unsaved filters when the 
   const modelInput = screen.getByPlaceholderText('Model Name')
   await user.type(modelInput, 'gemini')
 
-  expect(
-    screen.getByRole('spinbutton', { name: 'Minimum cost (CNY)' })
-  ).toHaveValue(70)
+  expect(screen.getByLabelText('Minimum cost (CNY)')).toHaveValue(70)
 
   act(() => {
     useSystemConfigStore.getState().setConfig({
@@ -153,9 +182,7 @@ it('reconverts the minimum cost without dropping other unsaved filters when the 
     })
   })
 
-  expect(
-    screen.getByRole('spinbutton', { name: 'Minimum cost (USD)' })
-  ).toHaveValue(10)
+  expect(screen.getByLabelText('Minimum cost (USD)')).toHaveValue(10)
   expect(modelInput).toHaveValue('gemini')
 })
 
@@ -164,9 +191,7 @@ it('round-trips a one-quota-unit minimum at the configured precision', async () 
   const router = await renderFilter('/usage-logs/common?minQuota=1')
   await user.click(screen.getByRole('button', { name: /^Expand/ }))
 
-  const input = screen.getByRole('spinbutton', {
-    name: 'Minimum cost (CNY)',
-  })
+  const input = screen.getByLabelText('Minimum cost (CNY)')
   expect(input).toHaveValue(0.000014)
 
   await user.click(screen.getByRole('button', { name: 'Search' }))
@@ -179,22 +204,27 @@ it('round-trips a one-quota-unit minimum at the configured precision', async () 
 })
 
 it('submits a custom-currency amount as raw quota from the Search button', async () => {
-  useSystemConfigStore.getState().setConfig({
-    currency: {
-      ...DEFAULT_CURRENCY_CONFIG,
-      quotaDisplayType: 'CUSTOM',
-      customCurrencySymbol: '¤',
-      customCurrencyExchangeRate: 0.5,
-    },
-  })
   const user = userEvent.setup()
   const router = await renderFilter()
+  act(() => {
+    useSystemConfigStore.setState(
+      (state) => ({
+        config: {
+          ...state.config,
+          currency: {
+            ...DEFAULT_CURRENCY_CONFIG,
+            quotaDisplayType: 'CUSTOM',
+            customCurrencySymbol: '¤',
+            customCurrencyExchangeRate: 0.5,
+          },
+        },
+      }),
+      false
+    )
+  })
   await user.click(screen.getByRole('button', { name: /^Expand/ }))
 
-  await user.type(
-    screen.getByRole('spinbutton', { name: 'Minimum cost (¤)' }),
-    '3.75'
-  )
+  await user.type(await screen.findByLabelText('Minimum cost (¤)'), '3.75')
   await user.click(screen.getByRole('button', { name: 'Search' }))
 
   await waitFor(() =>
@@ -227,9 +257,7 @@ it('removes the minimum-cost filter when the amount is cleared', async () => {
   )
   await user.click(screen.getByRole('button', { name: /^Expand/ }))
 
-  const input = screen.getByRole('spinbutton', {
-    name: 'Minimum cost (CNY)',
-  })
+  const input = screen.getByLabelText('Minimum cost (CNY)')
   await user.clear(input)
   await user.click(screen.getByRole('button', { name: 'Search' }))
 

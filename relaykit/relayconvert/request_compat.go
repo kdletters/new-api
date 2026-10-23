@@ -2,6 +2,7 @@ package relayconvert
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,8 +11,10 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/tidwall/sjson"
 )
 
 func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
@@ -58,15 +61,6 @@ func ApplyClaudeThinkingModel(claudeRequest *dto.ClaudeRequest, info convmeta.Me
 	return err
 }
 
-// claudeToolInputSchema is one tool input schema found in a Claude request,
-// tagged with the tool type so hosted tools can be skipped without depending on
-// the concrete tool slice type.
-type claudeToolInputSchema struct {
-	name        string
-	typeName    string
-	inputSchema map[string]any
-}
-
 // NormalizeClaudeToolInputSchemas flattens top-level oneOf/anyOf/allOf unions
 // of every client function tool carried by a Claude Messages request. It
 // mutates the request in place and returns one warning diagnostic per changed
@@ -76,13 +70,43 @@ func NormalizeClaudeToolInputSchemas(req *dto.ClaudeRequest) []types.ConversionD
 	if req == nil {
 		return nil
 	}
+	rawTools, ok := req.Tools.(json.RawMessage)
+	if !ok {
+		var err error
+		rawTools, err = kitutil.Marshal(req.Tools)
+		if err != nil {
+			return nil
+		}
+	}
+	normalized, diagnostics := normalizeClaudeToolInputSchemasRaw(rawTools)
+	if len(diagnostics) == 0 {
+		return diagnostics
+	}
+	req.Tools = normalized
+	return diagnostics
+}
+
+func normalizeClaudeToolInputSchemasRaw(rawTools json.RawMessage) (json.RawMessage, []types.ConversionDiagnostic) {
+	var tools []json.RawMessage
+	if err := kitutil.Unmarshal(rawTools, &tools); err != nil {
+		return rawTools, nil
+	}
 	var diagnostics []types.ConversionDiagnostic
-	for index, tool := range claudeRequestToolInputSchemas(req.Tools) {
-		schema := tool.inputSchema
-		if schema == nil || len(schema) == 0 {
+	changed := false
+	for index := range tools {
+		var tool struct {
+			Name        string          `json:"name"`
+			Type        string          `json:"type"`
+			InputSchema json.RawMessage `json:"input_schema"`
+		}
+		if err := kitutil.Unmarshal(tools[index], &tool); err != nil || len(tool.InputSchema) == 0 {
 			continue
 		}
-		if strings.HasPrefix(tool.typeName, "web_search") {
+		if strings.HasPrefix(tool.Type, "web_search") {
+			continue
+		}
+		var schema map[string]any
+		if err := kitutil.Unmarshal(tool.InputSchema, &schema); err != nil {
 			continue
 		}
 		typeName, isString := schema["type"].(string)
@@ -92,101 +116,31 @@ func NormalizeClaudeToolInputSchemas(req *dto.ClaudeRequest) []types.ConversionD
 		if !sharedclaude.FlattenInputSchemaUnions(schema) {
 			continue
 		}
+		flattened, err := kitutil.Marshal(schema)
+		if err != nil {
+			continue
+		}
+		updated, err := sjson.SetRawBytes(tools[index], "input_schema", flattened)
+		if err != nil {
+			continue
+		}
+		tools[index] = updated
+		changed = true
 		diagnostics = append(diagnostics, types.ConversionDiagnostic{
 			Code:     "claude_tool_schema_union_flattened",
 			Path:     fmt.Sprintf("tools[%d].input_schema", index),
-			Message:  fmt.Sprintf("tool %q input_schema used a top-level oneOf/anyOf/allOf union; flattened because Claude rejects top-level unions", tool.name),
+			Message:  fmt.Sprintf("tool %q input_schema used a top-level oneOf/anyOf/allOf union; flattened because Claude rejects top-level unions", tool.Name),
 			Severity: types.ConversionDiagnosticWarning,
 		})
 	}
-	return diagnostics
-}
-
-func claudeRequestToolInputSchemas(tools any) []claudeToolInputSchema {
-	if tools == nil {
-		return nil
+	if !changed {
+		return rawTools, diagnostics
 	}
-	var entries []any
-	switch value := tools.(type) {
-	case []any:
-		entries = value
-	case []map[string]any:
-		for _, tool := range value {
-			if tool != nil {
-				entries = append(entries, tool)
-			}
-		}
-	case []*dto.Tool:
-		entries = make([]any, 0, len(value))
-		for _, tool := range value {
-			if tool != nil {
-				entries = append(entries, tool)
-			}
-		}
-	case []dto.Tool:
-		entries = make([]any, 0, len(value))
-		for i := range value {
-			entries = append(entries, &value[i])
-		}
-	case []*dto.ClaudeWebSearchTool:
-		entries = make([]any, 0, len(value))
-		for _, tool := range value {
-			if tool != nil {
-				entries = append(entries, tool)
-			}
-		}
-	case []dto.ClaudeWebSearchTool:
-		entries = make([]any, 0, len(value))
-		for i := range value {
-			entries = append(entries, &value[i])
-		}
-	default:
-		return nil
+	normalized, err := kitutil.Marshal(tools)
+	if err != nil {
+		return rawTools, nil
 	}
-
-	schemas := make([]claudeToolInputSchema, 0, len(entries))
-	for _, entry := range entries {
-		switch tool := entry.(type) {
-		case *dto.Tool:
-			if tool != nil {
-				schemas = append(schemas, claudeToolInputSchema{name: tool.Name, inputSchema: tool.InputSchema})
-			}
-		case dto.Tool:
-			schemas = append(schemas, claudeToolInputSchema{name: tool.Name, inputSchema: tool.InputSchema})
-		case *dto.ClaudeWebSearchTool:
-			if tool != nil {
-				schemas = append(schemas, claudeToolInputSchema{name: tool.Name, typeName: tool.Type})
-			}
-		case dto.ClaudeWebSearchTool:
-			schemas = append(schemas, claudeToolInputSchema{name: tool.Name, typeName: tool.Type})
-		case map[string]any:
-			name, _ := tool["name"].(string)
-			typeName, _ := tool["type"].(string)
-			schemas = append(schemas, claudeToolInputSchema{
-				name:        name,
-				typeName:    typeName,
-				inputSchema: stringKeyedMap(tool["input_schema"]),
-			})
-		}
-	}
-	return schemas
-}
-
-// stringKeyedMap defensively accepts the map types a JSON-decoded schema may
-// have; a nil result means "no object schema here".
-func stringKeyedMap(value any) map[string]any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return typed
-	case map[string]map[string]any:
-		out := make(map[string]any, len(typed))
-		for key, nested := range typed {
-			out[key] = nested
-		}
-		return out
-	default:
-		return nil
-	}
+	return normalized, diagnostics
 }
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {

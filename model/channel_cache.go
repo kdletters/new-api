@@ -103,13 +103,13 @@ func InitChannelCache() {
 	// invalidating the pricing cache, otherwise the reversed order deadlocks.
 	InvalidatePricingCache()
 	rebuildTaskAliasView()
-	common.SysLog("channels synced from database")
+	common.SysLog(common.LogText("channels synced from database"))
 }
 
 func SyncChannelCache(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
-		common.SysLog("syncing channels from database")
+		common.SysLog(common.LogText("syncing channels from database"))
 		InitChannelCache()
 	}
 }
@@ -163,7 +163,7 @@ func GetRandomSatisfiedChannelDeprioritizing(
 		if channel, ok := channelsIDM[channels[0]]; ok {
 			return channel, nil
 		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
+		return nil, fmt.Errorf("database consistency error: channel #%d does not exist, please contact the administrator", channels[0])
 	}
 
 	preferredChannels := make([]int, 0, len(channels))
@@ -185,7 +185,7 @@ func GetRandomSatisfiedChannelDeprioritizing(
 		if channel, ok := channelsIDM[channelId]; ok {
 			uniquePriorities[int(channel.GetPriority())] = true
 		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+			return nil, fmt.Errorf("database consistency error: channel #%d does not exist, please contact the administrator", channelId)
 		}
 	}
 	var sortedUniquePriorities []int
@@ -225,7 +225,7 @@ func GetRandomSatisfiedChannelDeprioritizing(
 				selectedChannels = append(selectedChannels, channel)
 			}
 		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+			return nil, fmt.Errorf("database consistency error: channel #%d does not exist, please contact the administrator", channelId)
 		}
 	}
 
@@ -273,7 +273,7 @@ func CacheGetChannel(id int) (*Channel, error) {
 
 	c, ok := channelsIDM[id]
 	if !ok {
-		return nil, fmt.Errorf("渠道# %d，已不存在", id)
+		return nil, fmt.Errorf("channel #%d no longer exists", id)
 	}
 	return c, nil
 }
@@ -291,7 +291,7 @@ func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
 
 	c, ok := channelsIDM[id]
 	if !ok {
-		return nil, fmt.Errorf("渠道# %d，已不存在", id)
+		return nil, fmt.Errorf("channel #%d no longer exists", id)
 	}
 	return &c.ChannelInfo, nil
 }

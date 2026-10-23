@@ -101,12 +101,13 @@ func TestGetLogByKeyFiltersByRequestID(t *testing.T) {
 func TestGetLogsFiltersByMinQuota(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	database := setupLogQueryTestDB(t)
+	now := time.Now().Unix()
 	require.NoError(t, database.Create(&[]model.Log{
-		{Id: 1, UserId: 7, CreatedAt: 100, Type: model.LogTypeConsume, Quota: 50},
-		{Id: 2, UserId: 7, CreatedAt: 200, Type: model.LogTypeConsume, Quota: 100},
-		{Id: 3, UserId: 7, CreatedAt: 300, Type: model.LogTypeConsume, Quota: 101},
-		{Id: 4, UserId: 7, CreatedAt: 400, Type: model.LogTypeConsume, Quota: 200},
-		{Id: 5, UserId: 7, CreatedAt: 500, Type: model.LogTypeTopup, Quota: 1000},
+		{Id: 1, UserId: 7, CreatedAt: now - 50, Type: model.LogTypeConsume, Quota: 50},
+		{Id: 2, UserId: 7, CreatedAt: now - 40, Type: model.LogTypeConsume, Quota: 100},
+		{Id: 3, UserId: 7, CreatedAt: now - 30, Type: model.LogTypeConsume, Quota: 101},
+		{Id: 4, UserId: 7, CreatedAt: now - 20, Type: model.LogTypeConsume, Quota: 200},
+		{Id: 5, UserId: 7, CreatedAt: now - 10, Type: model.LogTypeTopup, Quota: 1000},
 	}).Error)
 
 	endpoints := []struct {

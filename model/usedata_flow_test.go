@@ -128,8 +128,8 @@ func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
 	require.Equal(t, "vip", adminRows[0].UseGroup)
 	require.Equal(t, "east", adminRows[0].ChannelName)
 	require.Equal(t, 150, adminRows[0].Quota)
-	require.Equal(t, 40, adminRows[0].CacheCreationTokens)
-	require.Equal(t, 11, adminRows[0].CacheReadTokens)
+	require.Equal(t, int64(40), adminRows[0].CacheCreationTokens)
+	require.Equal(t, int64(11), adminRows[0].CacheReadTokens)
 
 	selfRows, err := GetFlowQuotaData(900, 2000, "", 1, common.RoleCommonUser)
 	require.NoError(t, err)
@@ -140,8 +140,8 @@ func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
 	require.Empty(t, selfRows[0].TokenName)
 	require.Equal(t, "vip", selfRows[0].UseGroup)
 	require.Equal(t, 175, selfRows[0].Quota)
-	require.Equal(t, 47, selfRows[0].CacheCreationTokens)
-	require.Equal(t, 15, selfRows[0].CacheReadTokens)
+	require.Equal(t, int64(47), selfRows[0].CacheCreationTokens)
+	require.Equal(t, int64(15), selfRows[0].CacheReadTokens)
 }
 
 func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
@@ -223,10 +223,10 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 	require.Equal(t, 3, rows[0].Count)
 	require.Equal(t, 180, rows[0].Quota)
 	require.Equal(t, 65, rows[0].TokenUsed)
-	require.Equal(t, 60, rows[0].CacheCreationTokens)
-	require.Equal(t, 16, rows[0].CacheReadTokens)
+	require.Equal(t, int64(60), rows[0].CacheCreationTokens)
+	require.Equal(t, int64(16), rows[0].CacheReadTokens)
 	require.Equal(t, "default", rows[1].UseGroup)
 	require.Equal(t, 25, rows[1].Quota)
-	require.Equal(t, 7, rows[1].CacheCreationTokens)
-	require.Equal(t, 4, rows[1].CacheReadTokens)
+	require.Equal(t, int64(7), rows[1].CacheCreationTokens)
+	require.Equal(t, int64(4), rows[1].CacheReadTokens)
 }

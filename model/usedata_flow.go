@@ -18,8 +18,8 @@ type FlowQuotaData struct {
 	ChannelName         string `json:"channel_name,omitempty" gorm:"-"`
 	ModelName           string `json:"model_name" gorm:"column:model_name"`
 	TokenUsed           int    `json:"token_used" gorm:"column:token_used"`
-	CacheCreationTokens int    `json:"cache_creation_tokens" gorm:"column:cache_creation_tokens"`
-	CacheReadTokens     int    `json:"cache_read_tokens" gorm:"column:cache_read_tokens"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens" gorm:"column:cache_creation_tokens"`
+	CacheReadTokens     int64  `json:"cache_read_tokens" gorm:"column:cache_read_tokens"`
 	Count               int    `json:"count" gorm:"column:count"`
 	Quota               int    `json:"quota" gorm:"column:quota"`
 }

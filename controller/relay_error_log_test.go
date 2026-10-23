@@ -84,7 +84,7 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	require.True(t, ok)
 	assert.Equal(t, []any{"101"}, adminInfo["use_channel"])
 
-	logs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "", "", 0, 10, "", "", "", 0)
+	logs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError}, 0, 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, logs, 1)
@@ -107,9 +107,8 @@ func TestWriteRelayStreamErrorAfterHeadersWritten(t *testing.T) {
 	require.NoError(t, err)
 
 	apiErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
-	written := writeRelayStreamError(ctx, types.RelayFormatClaude, apiErr)
+	writeRelayStreamError(ctx, types.RelayFormatClaude, apiErr)
 
-	require.True(t, written)
 	assert.Contains(t, recorder.Body.String(), "event: error")
 	assert.Contains(t, recorder.Body.String(), `"type":"error"`)
 	assert.Contains(t, recorder.Body.String(), `"message":"upstream failed"`)
