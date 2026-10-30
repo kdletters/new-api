@@ -22,7 +22,11 @@ import { z } from 'zod'
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 
 import { DEFAULT_GROUP } from '../constants'
-import type { ApiKey, ApiKeyFormData } from '../types'
+import {
+  apiKeyQuotaResetPeriodSchema,
+  type ApiKey,
+  type ApiKeyFormData,
+} from '../types'
 
 // ============================================================================
 // Form Schema
@@ -38,6 +42,8 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
       remain_quota_dollars: z.number().optional(),
       expired_time: z.date().optional(),
       unlimited_quota: z.boolean(),
+      quota_reset_period: apiKeyQuotaResetPeriodSchema,
+      quota_reset_custom_seconds: z.number().min(0),
       model_limits: z.array(z.string()),
       allow_ips: z.string().optional(),
       allow_user_quota_query: z.boolean(),
@@ -86,6 +92,17 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
       }
 
       if (
+        data.quota_reset_period === 'custom' &&
+        data.quota_reset_custom_seconds <= 0
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['quota_reset_custom_seconds'],
+          message: t('Must be greater than 0'),
+        })
+      }
+
+      if (
         data.remain_quota_dollars === undefined ||
         data.remain_quota_dollars < 0
       ) {
@@ -109,6 +126,8 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   remain_quota_dollars: 10,
   expired_time: undefined,
   unlimited_quota: true,
+  quota_reset_period: 'never',
+  quota_reset_custom_seconds: 0,
   model_limits: [],
   allow_ips: '',
   allow_user_quota_query: true,
@@ -139,17 +158,23 @@ export function getApiKeyFormDefaultValues(
  * Transform form data to API payload
  */
 export function transformFormDataToPayload(
-  data: ApiKeyFormValues
+  data: ApiKeyFormValues,
+  options: { includeRemainQuota?: boolean } = {}
 ): ApiKeyFormData {
-  return {
+  const quotaResetPeriod = data.unlimited_quota
+    ? 'never'
+    : data.quota_reset_period
+  const includeRemainQuota = options.includeRemainQuota ?? true
+
+  const payload: ApiKeyFormData = {
     name: data.name,
-    remain_quota: data.unlimited_quota
-      ? 0
-      : parseQuotaFromDollars(data.remain_quota_dollars || 0),
     expired_time: data.expired_time
       ? Math.floor(data.expired_time.getTime() / 1000)
       : -1,
     unlimited_quota: data.unlimited_quota,
+    quota_reset_period: quotaResetPeriod,
+    quota_reset_custom_seconds:
+      quotaResetPeriod === 'custom' ? data.quota_reset_custom_seconds : 0,
     model_limits_enabled: data.model_limits.length > 0,
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
@@ -161,6 +186,12 @@ export function transformFormDataToPayload(
         : [],
     cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
   }
+  if (includeRemainQuota) {
+    payload.remain_quota = data.unlimited_quota
+      ? 0
+      : parseQuotaFromDollars(data.remain_quota_dollars || 0)
+  }
+  return payload
 }
 
 /**
@@ -188,6 +219,8 @@ export function transformApiKeyToFormDefaults(
         ? new Date(apiKey.expired_time * 1000)
         : undefined,
     unlimited_quota: apiKey.unlimited_quota,
+    quota_reset_period: apiKey.quota_reset_period || 'never',
+    quota_reset_custom_seconds: Number(apiKey.quota_reset_custom_seconds || 0),
     model_limits: apiKey.model_limits
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],
