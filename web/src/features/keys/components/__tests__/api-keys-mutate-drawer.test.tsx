@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test } from 'vitest'
+
+import type { ApiKey } from '../../types'
 
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
@@ -37,6 +40,7 @@ type ApiMethod = (url: string, data?: unknown) => Promise<{ data: unknown }>
 type MockableApi = {
   get: ApiMethod
   post: ApiMethod
+  put: ApiMethod
 }
 type RenderedDrawer = {
   queryClient: InstanceType<typeof QueryClient>
@@ -45,9 +49,18 @@ type RenderedDrawer = {
 const apiClient = api as unknown as MockableApi
 const originalGet = apiClient.get
 const originalPost = apiClient.post
+const originalPut = apiClient.put
 let renderedDrawer: RenderedDrawer | null = null
 
-function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
+type UpdateApiFixture = {
+  apiKey: ApiKey
+  updatedPayloads: Array<Record<string, unknown>>
+}
+
+function installApiFixtures(
+  createdPayloads: Array<Record<string, unknown>>,
+  updateFixture?: UpdateApiFixture
+) {
   apiClient.get = async (url) => {
     switch (url) {
       case '/api/status':
@@ -73,6 +86,9 @@ function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
           },
         }
       default:
+        if (updateFixture && url === `/api/token/${updateFixture.apiKey.id}`) {
+          return { data: { success: true, data: updateFixture.apiKey } }
+        }
         throw new Error(`Unexpected GET ${url}`)
     }
   }
@@ -82,9 +98,17 @@ function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
     createdPayloads.push(data as Record<string, unknown>)
     return { data: { success: true, data: {} } }
   }
+  if (updateFixture) {
+    apiClient.put = async (url, data) => {
+      expect(url).toBe('/api/token/')
+      expect(data && typeof data === 'object').toBeTruthy()
+      updateFixture.updatedPayloads.push(data as Record<string, unknown>)
+      return { data: { success: true, data: updateFixture.apiKey } }
+    }
+  }
 }
 
-async function renderCreateDrawer(): Promise<void> {
+async function renderDrawer(currentRow?: ApiKey): Promise<void> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -125,14 +149,18 @@ async function renderCreateDrawer(): Promise<void> {
     <QueryClientProvider client={queryClient}>
       <I18nextProvider i18n={i18n}>
         <ApiKeysProvider>
-          <ApiKeysMutateDrawer open onOpenChange={() => undefined} />
+          <ApiKeysMutateDrawer
+            open
+            onOpenChange={() => undefined}
+            currentRow={currentRow}
+          />
         </ApiKeysProvider>
       </I18nextProvider>
     </QueryClientProvider>
   )
   await waitFor(
     () => {
-      const saveButton = findButton('Save changes', false)
+      const saveButton = screen.getByRole('button', { name: 'Save changes' })
       expect(saveButton).toBeEnabled()
     },
     { timeout: 1500 }
@@ -154,6 +182,10 @@ function findButton(text: string, required = true): HTMLButtonElement | null {
 function getControlByLabel(labelText: 'Name' | 'Quantity'): HTMLInputElement
 function getControlByLabel(labelText: 'Group'): HTMLButtonElement
 function getControlByLabel(labelText: 'Auto group order'): HTMLElement
+function getControlByLabel(labelText: 'Custom Seconds'): HTMLInputElement
+function getControlByLabel(
+  labelText: 'Unlimited Quota' | 'Reset Cycle'
+): HTMLElement
 function getControlByLabel(labelText: string): HTMLElement {
   const label = [...document.querySelectorAll<HTMLLabelElement>('label')].find(
     (candidate) => candidate.textContent?.trim() === labelText
@@ -193,9 +225,23 @@ function selectComboboxOption(
   fireEvent.click(option)
 }
 
+async function selectOption(
+  trigger: HTMLElement,
+  optionDescription: string
+): Promise<void> {
+  const user = userEvent.setup()
+  await user.click(trigger)
+  await user.click(
+    await screen.findByRole('option', {
+      name: optionDescription,
+    })
+  )
+}
+
 afterEach(() => {
   apiClient.get = originalGet
   apiClient.post = originalPost
+  apiClient.put = originalPut
   localStorage.clear()
   if (renderedDrawer) {
     renderedDrawer.queryClient.clear()
@@ -207,7 +253,7 @@ describe('API keys mutate drawer Auto group integration', () => {
   test('inherits the root Auto order and sends an empty override for every batch-created key', async () => {
     const createdPayloads: Array<Record<string, unknown>> = []
     installApiFixtures(createdPayloads)
-    await renderCreateDrawer()
+    await renderDrawer()
 
     const groupTrigger = getControlByLabel('Group')
     expect(groupTrigger.textContent?.includes('auto')).toBe(true)
@@ -240,7 +286,7 @@ describe('API keys mutate drawer Auto group integration', () => {
   test('preserves an unsaved custom order and mode after Auto to ordinary to Auto changes', async () => {
     const createdPayloads: Array<Record<string, unknown>> = []
     installApiFixtures(createdPayloads)
-    await renderCreateDrawer()
+    await renderDrawer()
 
     const autoOrderControl = getControlByLabel('Auto group order')
     const addGroupTrigger = autoOrderControl.querySelector<HTMLButtonElement>(
@@ -297,5 +343,106 @@ describe('API keys mutate drawer user quota query switch', () => {
     fireEvent.click(findButton('Save changes', true))
     await waitFor(() => expect(createdPayloads).toHaveLength(1))
     expect(createdPayloads[0]?.allow_user_quota_query).toBe(false)
+  })
+})
+
+describe('API keys mutate drawer quota reset integration', () => {
+  test('configures a custom reset cycle only for limited quotas', async () => {
+    const createdPayloads: Array<Record<string, unknown>> = []
+    installApiFixtures(createdPayloads)
+    await renderDrawer()
+    const user = userEvent.setup()
+
+    expect(
+      screen.queryByRole('combobox', { name: 'Reset Cycle' })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('switch', { name: 'Unlimited Quota' }))
+
+    const resetCycle = screen.getByRole('combobox', { name: 'Reset Cycle' })
+    expect(resetCycle).toHaveAccessibleDescription(
+      'Choose how often the remaining quota is restored.'
+    )
+    expect(
+      screen.queryByRole('spinbutton', { name: 'Custom Seconds' })
+    ).not.toBeInTheDocument()
+
+    await selectOption(resetCycle, 'Custom (seconds)')
+    const customSeconds = screen.getByRole<HTMLInputElement>('spinbutton', {
+      name: 'Custom Seconds',
+    })
+    expect(customSeconds).toHaveValue(0)
+    expect(customSeconds).toHaveAccessibleDescription(
+      'Enter a reset interval greater than 0 seconds.'
+    )
+
+    changeInput(screen.getByRole('textbox', { name: 'Name' }), 'scheduled')
+    fireEvent.submit(
+      document.querySelector<HTMLFormElement>(
+        '#api-key-form'
+      ) as HTMLFormElement
+    )
+    await waitFor(() =>
+      expect(customSeconds).toHaveAttribute('aria-invalid', 'true')
+    )
+
+    changeInput(customSeconds, '3600')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(createdPayloads).toHaveLength(1))
+
+    expect(createdPayloads[0]).toMatchObject({
+      unlimited_quota: false,
+      quota_reset_period: 'custom',
+      quota_reset_custom_seconds: 3_600,
+    })
+  })
+
+  test('clears custom seconds when an existing reset cycle changes', async () => {
+    const existingApiKey: ApiKey = {
+      id: 7,
+      name: 'preloaded reset',
+      key: 'demo********1234',
+      status: 1,
+      remain_quota: 500_000,
+      used_quota: 250_000,
+      unlimited_quota: false,
+      quota_reset_period: 'custom',
+      quota_reset_custom_seconds: 3_600,
+      last_reset_time: 1_700_000_000,
+      next_reset_time: 1_700_003_600,
+      expired_time: -1,
+      created_time: 1_700_000_000,
+      accessed_time: 0,
+      group: 'default',
+      auto_groups: null,
+      cross_group_retry: false,
+      model_limits_enabled: false,
+      model_limits: '',
+      allow_ips: '',
+    }
+    const updatedPayloads: Array<Record<string, unknown>> = []
+    installApiFixtures([], { apiKey: existingApiKey, updatedPayloads })
+    await renderDrawer(existingApiKey)
+    const user = userEvent.setup()
+
+    const resetCycle = screen.getByRole('combobox', { name: 'Reset Cycle' })
+    expect(resetCycle).toHaveTextContent('Custom (seconds)')
+    expect(
+      screen.getByRole('spinbutton', { name: 'Custom Seconds' })
+    ).toHaveValue(3_600)
+
+    await selectOption(resetCycle, 'Daily')
+    expect(
+      screen.queryByRole('spinbutton', { name: 'Custom Seconds' })
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(updatedPayloads).toHaveLength(1))
+
+    expect(updatedPayloads[0]).toMatchObject({
+      id: existingApiKey.id,
+      quota_reset_period: 'daily',
+      quota_reset_custom_seconds: 0,
+    })
+    expect(updatedPayloads[0]).not.toHaveProperty('remain_quota')
   })
 })
