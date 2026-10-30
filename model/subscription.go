@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ const (
 	SubscriptionResetWeekly  = "weekly"
 	SubscriptionResetMonthly = "monthly"
 	SubscriptionResetCustom  = "custom"
+
+	MaxQuotaResetCustomSeconds = int64(math.MaxInt64 / int64(time.Second))
 )
 
 var (
@@ -341,11 +344,8 @@ func NormalizeResetPeriod(period string) string {
 	}
 }
 
-func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) int64 {
-	if plan == nil {
-		return 0
-	}
-	period := NormalizeResetPeriod(plan.QuotaResetPeriod)
+func calcQuotaResetNextTime(base time.Time, period string, customSeconds int64, endUnix int64) int64 {
+	period = NormalizeResetPeriod(period)
 	if period == SubscriptionResetNever {
 		return 0
 	}
@@ -369,10 +369,10 @@ func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) in
 		next = time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, base.Location()).
 			AddDate(0, 1, 0)
 	case SubscriptionResetCustom:
-		if plan.QuotaResetCustomSeconds <= 0 {
+		if customSeconds <= 0 || base.Unix() > math.MaxInt64-customSeconds {
 			return 0
 		}
-		next = base.Add(time.Duration(plan.QuotaResetCustomSeconds) * time.Second)
+		next = time.Unix(base.Unix()+customSeconds, 0)
 	default:
 		return 0
 	}
@@ -380,6 +380,13 @@ func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) in
 		return 0
 	}
 	return next.Unix()
+}
+
+func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) int64 {
+	if plan == nil {
+		return 0
+	}
+	return calcQuotaResetNextTime(base, plan.QuotaResetPeriod, plan.QuotaResetCustomSeconds, endUnix)
 }
 
 func GetSubscriptionPlanById(id int) (*SubscriptionPlan, error) {
@@ -1326,8 +1333,15 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		base = time.Unix(next, 0)
 		next = calcNextResetTime(base, plan, sub.EndTime)
 	}
+	if next == 0 {
+		if sub.NextResetTime == 0 {
+			return nil
+		}
+		sub.NextResetTime = 0
+		return tx.Save(sub).Error
+	}
 	if !advanced {
-		if sub.NextResetTime == 0 && next > 0 {
+		if sub.NextResetTime == 0 {
 			sub.NextResetTime = next
 			sub.LastResetTime = base.Unix()
 			return tx.Save(sub).Error
