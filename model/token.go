@@ -3,7 +3,9 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -12,26 +14,55 @@ import (
 )
 
 type Token struct {
-	Id                 int            `json:"id"`
-	UserId             int            `json:"user_id" gorm:"index"`
-	Key                string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
-	Status             int            `json:"status" gorm:"default:1"`
-	Name               string         `json:"name" gorm:"index" `
-	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
-	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
-	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
-	UnlimitedQuota     bool           `json:"unlimited_quota"`
-	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
-	ModelLimits        string         `json:"model_limits" gorm:"type:text"`
-	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
-	Group              string         `json:"group" gorm:"default:''"`
-	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
-	AutoGroups         string         `json:"-" gorm:"type:text"`
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
+	Id                 int     `json:"id"`
+	UserId             int     `json:"user_id" gorm:"index"`
+	Key                string  `json:"key" gorm:"type:varchar(128);uniqueIndex"`
+	Status             int     `json:"status" gorm:"default:1"`
+	Name               string  `json:"name" gorm:"index" `
+	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
+	AccessedTime       int64   `json:"accessed_time" gorm:"bigint"`
+	ExpiredTime        int64   `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
+	RemainQuota        int     `json:"remain_quota" gorm:"default:0"`
+	UnlimitedQuota     bool    `json:"unlimited_quota"`
+	ModelLimitsEnabled bool    `json:"model_limits_enabled"`
+	ModelLimits        string  `json:"model_limits" gorm:"type:text"`
+	AllowIps           *string `json:"allow_ips" gorm:"default:''"`
+	UsedQuota          int     `json:"used_quota" gorm:"default:0"` // used quota
+	Group              string  `json:"group" gorm:"default:''"`
+	CrossGroupRetry    bool    `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	AutoGroups         string  `json:"-" gorm:"type:text"`
 	// 允许用此令牌查询所属用户的额度；新建令牌默认开启，已有令牌升级后保持关闭
-	AllowUserQuotaQuery bool `json:"allow_user_quota_query"`
+	AllowUserQuotaQuery     bool           `json:"allow_user_quota_query"`
+	QuotaResetPeriod        string         `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
+	QuotaResetCustomSeconds int64          `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
+	LastResetTime           int64          `json:"last_reset_time" gorm:"type:bigint;default:0"`
+	NextResetTime           int64          `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
+	DeletedAt               gorm.DeletedAt `gorm:"index"`
+}
+
+// RecalculateTokenQuotaReset applies the normalized reset configuration and
+// starts a fresh schedule from now. Request-provided timestamps are ignored.
+func RecalculateTokenQuotaReset(token *Token, now int64) {
+	if token == nil {
+		return
+	}
+	token.QuotaResetPeriod = NormalizeResetPeriod(token.QuotaResetPeriod)
+	if token.UnlimitedQuota {
+		token.QuotaResetPeriod = SubscriptionResetNever
+	}
+	if token.QuotaResetPeriod != SubscriptionResetCustom {
+		token.QuotaResetCustomSeconds = 0
+	}
+	token.LastResetTime = 0
+	token.NextResetTime = 0
+	if token.QuotaResetPeriod == SubscriptionResetNever {
+		return
+	}
+	nextReset := calcQuotaResetNextTime(time.Unix(now, 0), token.QuotaResetPeriod, token.QuotaResetCustomSeconds, 0)
+	if nextReset > 0 {
+		token.LastResetTime = now
+		token.NextResetTime = nextReset
+	}
 }
 
 func (token *Token) GetAutoGroups() ([]string, error) {
@@ -230,22 +261,25 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			token.Status != common.TokenStatusEnabled {
 			return token, ErrTokenInvalid
 		}
-		if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
+		now := common.GetTimestamp()
+		if token.ExpiredTime != -1 && token.ExpiredTime < now {
 			if !common.RedisEnabled {
-				token.Status = common.TokenStatusExpired
-				err := token.SelectUpdate()
-				if err != nil {
-					common.SysLog(common.LogText("failed to update token status%s", err.Error()))
+				result := DB.Model(&Token{}).
+					Where("id = ? AND expired_time != -1 AND expired_time <= ?", token.Id, now).
+					Update("status", common.TokenStatusExpired)
+				if result.Error != nil {
+					common.SysLog(common.LogText("failed to update token status: %s", result.Error.Error()))
 				}
 			}
 			return token, ErrTokenInvalid
 		}
 		if !token.UnlimitedQuota && token.RemainQuota <= 0 {
 			if !common.RedisEnabled {
-				token.Status = common.TokenStatusExhausted
-				err := token.SelectUpdate()
-				if err != nil {
-					common.SysLog(common.LogText("failed to update token status%s", err.Error()))
+				result := DB.Model(&Token{}).
+					Where("id = ? AND unlimited_quota = ? AND remain_quota <= 0", token.Id, false).
+					Update("status", common.TokenStatusExhausted)
+				if result.Error != nil {
+					common.SysLog(common.LogText("failed to update token status: %s", result.Error.Error()))
 				}
 			}
 			return token, ErrTokenInvalid
@@ -302,6 +336,179 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 	return token, nil
 }
 
+func advanceTokenQuotaResetSchedule(token *Token, now int64) (bool, int64, int64) {
+	period := NormalizeResetPeriod(token.QuotaResetPeriod)
+	if period == SubscriptionResetNever {
+		return false, 0, 0
+	}
+
+	baseUnix := token.LastResetTime
+	advanced := false
+	if baseUnix <= 0 {
+		if token.NextResetTime > 0 && token.NextResetTime <= now {
+			baseUnix = token.NextResetTime
+			advanced = true
+		} else {
+			baseUnix = now
+		}
+	}
+	base := time.Unix(baseUnix, 0)
+	nextReset := calcQuotaResetNextTime(base, period, token.QuotaResetCustomSeconds, 0)
+	if nextReset == 0 || nextReset > now {
+		return advanced, baseUnix, nextReset
+	}
+
+	if period == SubscriptionResetCustom {
+		customSeconds := token.QuotaResetCustomSeconds
+		if customSeconds <= 0 {
+			return false, baseUnix, 0
+		}
+		if baseUnix < 0 && now > math.MaxInt64+baseUnix {
+			return false, baseUnix, 0
+		}
+		elapsed := now - baseUnix
+		steps := elapsed / customSeconds
+		lastReset := baseUnix + steps*customSeconds
+		if lastReset > math.MaxInt64-customSeconds {
+			return true, lastReset, 0
+		}
+		return true, lastReset, lastReset + customSeconds
+	}
+
+	var periodStart time.Time
+	nowTime := time.Unix(now, 0)
+	switch period {
+	case SubscriptionResetDaily:
+		periodStart = time.Date(nowTime.Year(), nowTime.Month(), nowTime.Day(), 0, 0, 0, 0, nowTime.Location())
+	case SubscriptionResetWeekly:
+		weekday := int(nowTime.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		periodStart = time.Date(nowTime.Year(), nowTime.Month(), nowTime.Day(), 0, 0, 0, 0, nowTime.Location()).
+			AddDate(0, 0, 1-weekday)
+	case SubscriptionResetMonthly:
+		periodStart = time.Date(nowTime.Year(), nowTime.Month(), 1, 0, 0, 0, 0, nowTime.Location())
+	default:
+		return false, baseUnix, 0
+	}
+	return true, periodStart.Unix(), calcQuotaResetNextTime(periodStart, period, 0, 0)
+}
+
+func resetTokenQuotaTx(tx *gorm.DB, token *Token, now int64) (bool, error) {
+	if tx == nil || token == nil || token.NextResetTime <= 0 || token.NextResetTime > now {
+		return false, nil
+	}
+	if token.UnlimitedQuota || NormalizeResetPeriod(token.QuotaResetPeriod) == SubscriptionResetNever {
+		return false, tx.Model(&Token{}).Where("id = ?", token.Id).Updates(map[string]any{
+			"last_reset_time": 0,
+			"next_reset_time": 0,
+		}).Error
+	}
+
+	advanced, lastResetTime, nextResetTime := advanceTokenQuotaResetSchedule(token, now)
+	if !advanced {
+		if token.LastResetTime == lastResetTime && token.NextResetTime == nextResetTime {
+			return false, nil
+		}
+		return false, tx.Model(&Token{}).Where("id = ?", token.Id).Updates(map[string]any{
+			"last_reset_time": lastResetTime,
+			"next_reset_time": nextResetTime,
+		}).Error
+	}
+
+	remainQuota := token.RemainQuota
+	if token.UsedQuota > 0 {
+		maxInt := int(^uint(0) >> 1)
+		if remainQuota > 0 && token.UsedQuota > maxInt-remainQuota {
+			return false, fmt.Errorf("token quota total overflows for token %d", token.Id)
+		}
+		remainQuota += token.UsedQuota
+	}
+	status := token.Status
+	if status == common.TokenStatusExhausted && remainQuota > 0 &&
+		(token.ExpiredTime == -1 || token.ExpiredTime > now) {
+		status = common.TokenStatusEnabled
+	}
+	return true, tx.Model(&Token{}).Where("id = ?", token.Id).Updates(map[string]any{
+		"remain_quota":    remainQuota,
+		"used_quota":      0,
+		"status":          status,
+		"last_reset_time": lastResetTime,
+		"next_reset_time": nextResetTime,
+	}).Error
+}
+
+// ResetDueTokens resets token quota cycles whose next_reset_time has passed.
+func ResetDueTokens(limit int) (int, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	now := GetDBTimestamp()
+	resetBefore := now
+	// Other nodes may still hold pre-reset quota deltas in their process-local
+	// batch stores. Give those stores at least two flush intervals to land
+	// before preserving the old cycle's allocation.
+	if common.BatchUpdateEnabled {
+		graceSeconds := int64(max(common.BatchUpdateInterval*2, 10))
+		graceSeconds = min(graceSeconds, int64(60))
+		resetBefore -= graceSeconds
+	}
+	var tokens []Token
+	if err := DB.Where("next_reset_time > 0 AND next_reset_time <= ?", resetBefore).
+		Order("next_reset_time asc").
+		Limit(limit).
+		Find(&tokens).Error; err != nil {
+		return 0, err
+	}
+	if len(tokens) == 0 {
+		return 0, nil
+	}
+
+	eligible := make([]Token, 0, len(tokens))
+	for i := range tokens {
+		if err := invalidateTokenCacheForMutation(tokens[i].Key); err != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate token cache before quota reset for token %d: %v", tokens[i].Id, err))
+		}
+		eligible = append(eligible, tokens[i])
+	}
+	// Flush pending quota deltas before taking row locks so usage from the
+	// previous cycle is included in the allocation being preserved.
+	if common.BatchUpdateEnabled {
+		batchUpdate()
+	}
+
+	resetCount := 0
+	for _, token := range eligible {
+		var reset bool
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			var locked Token
+			if err := lockForUpdate(tx).
+				Where("id = ? AND next_reset_time > 0 AND next_reset_time <= ?", token.Id, resetBefore).
+				First(&locked).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil
+				}
+				return err
+			}
+			var err error
+			reset, err = resetTokenQuotaTx(tx, &locked, now)
+			return err
+		})
+		if err != nil {
+			return resetCount, err
+		}
+		if !reset {
+			continue
+		}
+		resetCount++
+		if err := invalidateTokenCacheForMutation(token.Key); err != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate token cache after quota reset for token %d: %v", token.Id, err))
+		}
+	}
+	return resetCount, nil
+}
+
 func (token *Token) Insert() error {
 	var err error
 	err = DB.Create(token).Error
@@ -317,6 +524,56 @@ func (token *Token) Update() (err error) {
 	return DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "auto_groups",
 		"allow_user_quota_query").Updates(token).Error
+}
+
+var tokenMutableUpdateColumns = []string{
+	"name", "status", "expired_time", "remain_quota", "unlimited_quota",
+	"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "auto_groups",
+	"allow_user_quota_query", "quota_reset_period", "quota_reset_custom_seconds", "last_reset_time", "next_reset_time",
+}
+
+// UpdateUserTokenWithLock applies a user-scoped token mutation while holding a
+// row lock, so a concurrent scheduled quota reset cannot be overwritten by a
+// stale controller read.
+func UpdateUserTokenWithLock(userId int, tokenId int, mutate func(*Token) error) (*Token, error) {
+	if userId <= 0 || tokenId <= 0 {
+		return nil, errors.New("invalid token update args")
+	}
+	if mutate == nil {
+		return nil, errors.New("token update mutation is required")
+	}
+	var tokenKey string
+	keyResult := DB.Model(&Token{}).
+		Where("id = ? AND user_id = ?", tokenId, userId).
+		Limit(1).
+		Pluck(commonKeyCol, &tokenKey)
+	if keyResult.Error != nil {
+		return nil, keyResult.Error
+	}
+	if keyResult.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if cacheErr := invalidateTokenCacheForMutation(tokenKey); cacheErr != nil {
+		common.SysLog(common.LogText("failed to invalidate token cache before locked update: %s", cacheErr.Error()))
+	}
+
+	var token Token
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", tokenId, userId).First(&token).Error; err != nil {
+			return err
+		}
+		if err := mutate(&token); err != nil {
+			return err
+		}
+		return tx.Model(&token).Select(tokenMutableUpdateColumns).Updates(&token).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog(common.LogText("failed to invalidate token cache after locked update: %s", cacheErr.Error()))
+	}
+	return &token, nil
 }
 
 func (token *Token) SelectUpdate() (err error) {
