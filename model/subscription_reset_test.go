@@ -208,6 +208,35 @@ func TestAdminResetPlanSubscriptionsNoMatchSucceeds(t *testing.T) {
 	assert.Empty(t, result.AffectedUserIds)
 }
 
+func TestResetDueSubscriptionsDisablesInvalidCustomSchedule(t *testing.T) {
+	truncateTables(t)
+
+	now := GetDBTimestamp()
+	plan := &SubscriptionPlan{
+		Id:                      9801,
+		Title:                   "Invalid custom",
+		PriceAmount:             1,
+		DurationUnit:            SubscriptionDurationMonth,
+		DurationValue:           1,
+		TotalAmount:             1000,
+		QuotaResetPeriod:        SubscriptionResetCustom,
+		QuotaResetCustomSeconds: MaxQuotaResetCustomSeconds + 1,
+	}
+	seedSubscriptionResetPlan(t, plan)
+	seedSubscriptionResetSub(t, &UserSubscription{
+		Id: 9802, UserId: 701, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 250,
+		StartTime: now - 3600, EndTime: now + 30*24*3600, Status: "active",
+		LastResetTime: now - 3600, NextResetTime: now - 1,
+	})
+
+	_, err := ResetDueSubscriptions(10)
+	require.NoError(t, err)
+
+	sub := getSubscriptionResetSub(t, 9802)
+	assert.EqualValues(t, 250, sub.AmountUsed)
+	assert.Zero(t, sub.NextResetTime)
+}
+
 func TestSyncPlanSubscriptionsQuotaSnapshotUpdatesActiveSubscriptions(t *testing.T) {
 	truncateTables(t)
 

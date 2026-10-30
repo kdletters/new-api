@@ -51,6 +51,7 @@ import {
   API_KEY_STATUSES,
   ERROR_MESSAGES,
 } from '../constants'
+import { getApiKeysResetRefetchInterval } from '../lib'
 import type { ApiKey } from '../types'
 import { ApiKeyQuotaCell } from './api-key-quota-cell'
 import { ApiKeyActivityCell } from './api-key-timestamp-cell'
@@ -258,7 +259,6 @@ export function ApiKeysTable() {
     onColumnFiltersChange,
   })
   const shouldSearch = Boolean(globalFilter?.trim() || tokenFilter.trim())
-
   // Fetch data with React Query
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const { data, isLoading, isFetching } = useQuery({
@@ -300,6 +300,8 @@ export function ApiKeysTable() {
       }
     },
     placeholderData: (previousData) => previousData,
+    refetchInterval: (query) =>
+      getApiKeysResetRefetchInterval(query.state.data?.items || []),
   })
 
   const apiKeys = data?.items || []

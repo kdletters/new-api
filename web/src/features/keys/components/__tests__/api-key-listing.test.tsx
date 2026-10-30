@@ -45,11 +45,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import zh from '@/i18n/locales/zh.json'
 import { api } from '@/lib/api'
+import { formatTimestamp } from '@/lib/format'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
+import { getApiKeysResetRefetchInterval } from '../../lib'
 import { apiKeySchema, type ApiKey } from '../../types'
 import { ApiKeyQuotaCell } from '../api-key-quota-cell'
 import { useApiKeysColumns } from '../api-keys-columns'
@@ -276,11 +278,85 @@ it('opens details with the keyboard and restores focus when Escape closes them',
   expect(within(detail).getByText('200')).toBeInTheDocument()
   expect(within(detail).getByText('Remaining percentage')).toBeInTheDocument()
   expect(within(detail).getByText('40%')).toBeInTheDocument()
+  expect(within(detail).queryByText('Reset Cycle')).not.toBeInTheDocument()
+  expect(detail).toHaveTextContent(
+    'It is not an initial allocation or a periodic budget'
+  )
   await user.keyboard('{Escape}')
   await waitFor(() =>
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   )
   expect(button).toHaveFocus()
+})
+
+it('shows the reset cycle and next reset time for a scheduled quota', async () => {
+  const nextResetTime = 1_700_604_800
+  renderQuota({
+    ...key,
+    quota_reset_period: 'custom',
+    quota_reset_custom_seconds: 604_800,
+    last_reset_time: 1_700_000_000,
+    next_reset_time: nextResetTime,
+  })
+
+  await userEvent.click(screen.getByRole('button'))
+  const detail = await screen.findByRole('dialog')
+
+  expect(within(detail).getByText('Reset Cycle')).toBeVisible()
+  expect(within(detail).getByText('7 days')).toBeVisible()
+  expect(within(detail).getByText('Next reset')).toBeVisible()
+  expect(within(detail).getByText(formatTimestamp(nextResetTime))).toBeVisible()
+  expect(detail).toHaveTextContent(
+    'Current total = used + remaining. Changing the remaining quota updates the total and percentage.'
+  )
+  expect(detail).not.toHaveTextContent(
+    'It is not an initial allocation or a periodic budget'
+  )
+})
+
+it.each([
+  [90, '1 minute 30 seconds'],
+  [3_600, '1 hour'],
+  [3_661, '1 hour 1 minute 1 second'],
+])(
+  'shows an exact reset duration for %i seconds',
+  async (customSeconds, expectedDuration) => {
+    renderQuota({
+      ...key,
+      quota_reset_period: 'custom',
+      quota_reset_custom_seconds: customSeconds,
+      last_reset_time: 1_700_000_000,
+      next_reset_time: 1_700_003_600,
+    })
+
+    await userEvent.click(screen.getByRole('button'))
+    const detail = await screen.findByRole('dialog')
+
+    expect(within(detail).getByText(expectedDuration)).toBeVisible()
+    expect(within(detail).queryByText('1 hours')).not.toBeInTheDocument()
+  }
+)
+
+it('polls only while a visible API key has a scheduled reset', () => {
+  const nowSeconds = now / 1000
+  const futureReset = {
+    ...key,
+    quota_reset_period: 'daily' as const,
+    next_reset_time: nowSeconds + 120,
+  }
+  const soonReset = {
+    ...futureReset,
+    next_reset_time: nowSeconds + 20,
+  }
+  const dueReset = {
+    ...futureReset,
+    next_reset_time: nowSeconds - 1,
+  }
+
+  expect(getApiKeysResetRefetchInterval([key], now)).toBe(false)
+  expect(getApiKeysResetRefetchInterval([futureReset], now)).toBe(60_000)
+  expect(getApiKeysResetRefetchInterval([soonReset], now)).toBe(60_000)
+  expect(getApiKeysResetRefetchInterval([dueReset], now)).toBe(10_000)
 })
 
 it('keeps a long amount within its column while showing the full amount in details', async () => {

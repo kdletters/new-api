@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
+import {
+  ChevronDown,
+  KeyRound,
+  RefreshCw,
+  Settings2,
+  WalletCards,
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -52,6 +58,14 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Sheet,
   SheetClose,
   SheetContent,
@@ -79,7 +93,11 @@ import {
   getApiKey,
   getTokenAutoGroups,
 } from '../api'
-import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
+import {
+  API_KEY_QUOTA_RESET_PERIOD_OPTIONS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+} from '../constants'
 import {
   getApiKeyFormSchema,
   type ApiKeyFormValues,
@@ -287,7 +305,14 @@ export function ApiKeysMutateDrawer({
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
     try {
-      const basePayload = transformFormDataToPayload(data)
+      const dirtyFields = form.formState.dirtyFields
+      const includeRemainQuota =
+        !isUpdate ||
+        !!dirtyFields.remain_quota_dollars ||
+        !!dirtyFields.unlimited_quota
+      const basePayload = transformFormDataToPayload(data, {
+        includeRemainQuota,
+      })
 
       if (isUpdate && currentRow) {
         const result = await updateApiKey({
@@ -366,6 +391,10 @@ export function ApiKeysMutateDrawer({
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
   const autoGroupsMode = form.watch('auto_groups_mode')
   const unlimitedQuota = form.watch('unlimited_quota')
+  const quotaResetPeriod = form.watch('quota_reset_period')
+  const quotaResetPeriodOptions = API_KEY_QUOTA_RESET_PERIOD_OPTIONS.map(
+    (option) => ({ value: option.value, label: t(option.label) })
+  )
 
   return (
     <Sheet
@@ -672,6 +701,89 @@ export function ApiKeysMutateDrawer({
                 )}
               />
             </SideDrawerSection>
+
+            {!unlimitedQuota && (
+              <SideDrawerSection>
+                <SideDrawerSectionHeader
+                  title={t('Quota Reset')}
+                  icon={<RefreshCw className='size-4' />}
+                  iconTone='success'
+                />
+                <FormField
+                  control={form.control}
+                  name='quota_reset_period'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Reset Cycle')}</FormLabel>
+                      <Select
+                        items={quotaResetPeriodOptions}
+                        value={field.value}
+                        onValueChange={(value) => {
+                          field.onChange(value)
+                          if (value !== 'custom') {
+                            form.setValue('quota_reset_custom_seconds', 0, {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            })
+                          }
+                        }}
+                      >
+                        <FormControl>
+                          <SelectTrigger className='w-full'>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {quotaResetPeriodOptions.map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {t('Choose how often the remaining quota is restored.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {quotaResetPeriod === 'custom' && (
+                  <FormField
+                    control={form.control}
+                    name='quota_reset_custom_seconds'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Custom Seconds')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            {...field}
+                            type='number'
+                            min={1}
+                            step={1}
+                            onChange={(event) =>
+                              field.onChange(
+                                Number.parseInt(event.target.value, 10) || 0
+                              )
+                            }
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Enter a reset interval greater than 0 seconds.')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+              </SideDrawerSection>
+            )}
 
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
               <SideDrawerSection>

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,12 +37,62 @@ type tokenRequest struct {
 	model.Token
 	AutoGroups tokenAutoGroupsInput `json:"auto_groups"`
 	// 指针区分“未传”和显式 false：新建时未传即开启，更新时未传则保留原值。
-	AllowUserQuotaQuery *bool `json:"allow_user_quota_query"`
+	AllowUserQuotaQuery     *bool   `json:"allow_user_quota_query"`
+	RemainQuota             *int    `json:"remain_quota"`
+	QuotaResetPeriod        *string `json:"quota_reset_period"`
+	QuotaResetCustomSeconds *int64  `json:"quota_reset_custom_seconds"`
 }
 
 type tokenResponse struct {
 	*model.Token
 	AutoGroups []string `json:"auto_groups"`
+}
+
+var errTokenUpdateRejected = errors.New("token update rejected")
+
+func applyTokenQuotaResetInput(request *tokenRequest) {
+	if request.RemainQuota != nil {
+		request.Token.RemainQuota = *request.RemainQuota
+	}
+	if request.QuotaResetPeriod != nil {
+		request.Token.QuotaResetPeriod = *request.QuotaResetPeriod
+	}
+	if request.QuotaResetCustomSeconds != nil {
+		request.Token.QuotaResetCustomSeconds = *request.QuotaResetCustomSeconds
+	}
+}
+
+func validateTokenQuotaResetConfig(c *gin.Context, token *model.Token) bool {
+	if token.UnlimitedQuota {
+		token.QuotaResetPeriod = model.SubscriptionResetNever
+		token.QuotaResetCustomSeconds = 0
+		return true
+	}
+	period := strings.TrimSpace(token.QuotaResetPeriod)
+	if period == "" {
+		period = model.SubscriptionResetNever
+	}
+	switch period {
+	case model.SubscriptionResetNever, model.SubscriptionResetDaily,
+		model.SubscriptionResetWeekly, model.SubscriptionResetMonthly, model.SubscriptionResetCustom:
+		token.QuotaResetPeriod = period
+	default:
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaResetPeriodInvalid)
+		return false
+	}
+	if token.QuotaResetCustomSeconds < 0 || token.QuotaResetCustomSeconds > model.MaxQuotaResetCustomSeconds {
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaResetCustomSecondsInvalid, map[string]any{"Max": model.MaxQuotaResetCustomSeconds})
+		return false
+	}
+	if period != model.SubscriptionResetCustom {
+		token.QuotaResetCustomSeconds = 0
+		return true
+	}
+	if token.QuotaResetCustomSeconds == 0 {
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaResetCustomSecondsInvalid, map[string]any{"Max": model.MaxQuotaResetCustomSeconds})
+		return false
+	}
+	return true
 }
 
 func maxTokenQuota() int {
@@ -303,9 +354,13 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	applyTokenQuotaResetInput(&request)
 	token := request.Token
 	if len(token.Name) > 50 {
 		common.ApiErrorT(c, "Token name is too long")
+		return
+	}
+	if !validateTokenQuotaResetConfig(c, &token) {
 		return
 	}
 	params := tokenAuditParams(c)
@@ -347,21 +402,26 @@ func AddToken(c *gin.Context) {
 		common.SysLog(common.LogText("failed to generate token key: %s", err.Error()))
 		return
 	}
+	model.RecalculateTokenQuotaReset(&token, model.GetDBTimestamp())
 	cleanToken := model.Token{
-		UserId:             c.GetInt("id"),
-		Name:               token.Name,
-		Key:                key,
-		CreatedTime:        common.GetTimestamp(),
-		AccessedTime:       common.GetTimestamp(),
-		ExpiredTime:        token.ExpiredTime,
-		RemainQuota:        token.RemainQuota,
-		UnlimitedQuota:     token.UnlimitedQuota,
-		ModelLimitsEnabled: token.ModelLimitsEnabled,
-		ModelLimits:        token.ModelLimits,
-		AllowIps:           token.AllowIps,
-		Group:              token.Group,
-		CrossGroupRetry:    token.CrossGroupRetry,
-		AutoGroups:         token.AutoGroups,
+		UserId:                  c.GetInt("id"),
+		Name:                    token.Name,
+		Key:                     key,
+		CreatedTime:             common.GetTimestamp(),
+		AccessedTime:            common.GetTimestamp(),
+		ExpiredTime:             token.ExpiredTime,
+		RemainQuota:             token.RemainQuota,
+		UnlimitedQuota:          token.UnlimitedQuota,
+		ModelLimitsEnabled:      token.ModelLimitsEnabled,
+		ModelLimits:             token.ModelLimits,
+		AllowIps:                token.AllowIps,
+		Group:                   token.Group,
+		CrossGroupRetry:         token.CrossGroupRetry,
+		AutoGroups:              token.AutoGroups,
+		QuotaResetPeriod:        token.QuotaResetPeriod,
+		QuotaResetCustomSeconds: token.QuotaResetCustomSeconds,
+		LastResetTime:           token.LastResetTime,
+		NextResetTime:           token.NextResetTime,
 	}
 	cleanToken.AllowUserQuotaQuery = request.AllowUserQuotaQuery == nil || *request.AllowUserQuotaQuery
 	err = cleanToken.Insert()
@@ -408,6 +468,7 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	applyTokenQuotaResetInput(&request)
 	token := request.Token
 	params := tokenAuditParams(c)
 	if token.Id > 0 {
@@ -417,7 +478,7 @@ func UpdateToken(c *gin.Context) {
 		common.ApiErrorT(c, "Token name is too long")
 		return
 	}
-	if !token.UnlimitedQuota {
+	if request.RemainQuota != nil && !token.UnlimitedQuota {
 		if token.RemainQuota < 0 {
 			common.ApiErrorT(c, "Quota value cannot be negative")
 			return
@@ -428,30 +489,41 @@ func UpdateToken(c *gin.Context) {
 			return
 		}
 	}
-	cleanToken, err := model.GetTokenByIds(token.Id, userId)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	params["name"] = cleanToken.Name
-	previous := *cleanToken
-	if token.Status == common.TokenStatusEnabled {
-		if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
-			common.ApiErrorT(c, "Token has expired and cannot be enabled. Please modify the expiration time or set it to never expire")
-			return
-		}
-		if cleanToken.Status == common.TokenStatusExhausted && cleanToken.RemainQuota <= 0 && !cleanToken.UnlimitedQuota {
-			common.ApiErrorT(c, "Token quota is exhausted and cannot be enabled. Please modify the remaining quota or set it to unlimited")
+	autoGroupsToken := token
+	if token.Group != "auto" {
+		autoGroupsToken.CrossGroupRetry = false
+		_ = autoGroupsToken.SetAutoGroups(nil)
+	} else if request.AutoGroups.Set {
+		if !setTokenAutoGroups(c, &autoGroupsToken, request.AutoGroups.Groups) {
 			return
 		}
 	}
-	if statusOnly != "" {
-		cleanToken.Status = token.Status
-	} else {
-		// If you add more fields, please also update token.Update()
+
+	var previous model.Token
+	updateNow := model.GetDBTimestamp()
+	cleanToken, err := model.UpdateUserTokenWithLock(userId, token.Id, func(cleanToken *model.Token) error {
+		previous = *cleanToken
+		params["name"] = cleanToken.Name
+		if token.Status == common.TokenStatusEnabled {
+			if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= updateNow && cleanToken.ExpiredTime != -1 {
+				common.ApiErrorT(c, "Token has expired and cannot be enabled. Please modify the expiration time or set it to never expire")
+				return errTokenUpdateRejected
+			}
+			if cleanToken.Status == common.TokenStatusExhausted && cleanToken.RemainQuota <= 0 && !cleanToken.UnlimitedQuota {
+				common.ApiErrorT(c, "Token quota is exhausted and cannot be enabled. Please modify the remaining quota or set it to unlimited")
+				return errTokenUpdateRejected
+			}
+		}
+		if statusOnly != "" {
+			cleanToken.Status = token.Status
+			return nil
+		}
+
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime
-		cleanToken.RemainQuota = token.RemainQuota
+		if request.RemainQuota != nil {
+			cleanToken.RemainQuota = token.RemainQuota
+		}
 		cleanToken.UnlimitedQuota = token.UnlimitedQuota
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
@@ -460,17 +532,30 @@ func UpdateToken(c *gin.Context) {
 			cleanToken.AllowUserQuotaQuery = *request.AllowUserQuotaQuery
 		}
 		cleanToken.Group = token.Group
-		cleanToken.CrossGroupRetry = token.CrossGroupRetry
-		if token.Group != "auto" {
-			cleanToken.CrossGroupRetry = false
-			_ = cleanToken.SetAutoGroups(nil)
-		} else if request.AutoGroups.Set {
-			if !setTokenAutoGroups(c, cleanToken, request.AutoGroups.Groups) {
-				return
-			}
+		cleanToken.CrossGroupRetry = autoGroupsToken.CrossGroupRetry
+		if token.Group != "auto" || request.AutoGroups.Set {
+			cleanToken.AutoGroups = autoGroupsToken.AutoGroups
 		}
+		if request.QuotaResetPeriod != nil {
+			cleanToken.QuotaResetPeriod = token.QuotaResetPeriod
+		}
+		if request.QuotaResetCustomSeconds != nil {
+			cleanToken.QuotaResetCustomSeconds = token.QuotaResetCustomSeconds
+		}
+		if !validateTokenQuotaResetConfig(c, cleanToken) {
+			return errTokenUpdateRejected
+		}
+		quotaResetScheduleChanged := previous.QuotaResetPeriod != cleanToken.QuotaResetPeriod ||
+			previous.QuotaResetCustomSeconds != cleanToken.QuotaResetCustomSeconds ||
+			previous.UnlimitedQuota != cleanToken.UnlimitedQuota
+		if quotaResetScheduleChanged {
+			model.RecalculateTokenQuotaReset(cleanToken, updateNow)
+		}
+		return nil
+	})
+	if errors.Is(err, errTokenUpdateRejected) {
+		return
 	}
-	err = cleanToken.Update()
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -496,6 +581,10 @@ func UpdateToken(c *gin.Context) {
 			{"group", previous.Group != cleanToken.Group},
 			{"cross_group_retry", previous.CrossGroupRetry != cleanToken.CrossGroupRetry},
 			{"auto_groups", previous.AutoGroups != cleanToken.AutoGroups},
+			{"quota_reset_period", previous.QuotaResetPeriod != cleanToken.QuotaResetPeriod},
+			{"quota_reset_custom_seconds", previous.QuotaResetCustomSeconds != cleanToken.QuotaResetCustomSeconds},
+			{"last_reset_time", previous.LastResetTime != cleanToken.LastResetTime},
+			{"next_reset_time", previous.NextResetTime != cleanToken.NextResetTime},
 		} {
 			if field.changed {
 				changedFields = append(changedFields, field.name)

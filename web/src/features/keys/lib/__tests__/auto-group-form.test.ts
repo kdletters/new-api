@@ -42,6 +42,10 @@ const baseApiKey: ApiKey = {
   remain_quota: 0,
   used_quota: 0,
   unlimited_quota: true,
+  quota_reset_period: 'never',
+  quota_reset_custom_seconds: 0,
+  last_reset_time: 0,
+  next_reset_time: 0,
   expired_time: -1,
   created_time: 1,
   accessed_time: 0,
@@ -55,11 +59,20 @@ const baseApiKey: ApiKey = {
 }
 
 describe('API key Auto group form mapping', () => {
-  test('treats legacy token responses without auto_groups as inheritance', () => {
+  test('treats legacy token responses as reset-disabled inheritance', () => {
     const legacyApiKey: Record<string, unknown> = { ...baseApiKey }
     delete legacyApiKey.auto_groups
+    delete legacyApiKey.quota_reset_period
+    delete legacyApiKey.quota_reset_custom_seconds
+    delete legacyApiKey.last_reset_time
+    delete legacyApiKey.next_reset_time
 
-    expect(apiKeySchema.parse(legacyApiKey).auto_groups).toBe(null)
+    const parsed = apiKeySchema.parse(legacyApiKey)
+    expect(parsed.auto_groups).toBe(null)
+    expect(parsed.quota_reset_period).toBe('never')
+    expect(parsed.quota_reset_custom_seconds).toBe(0)
+    expect(parsed.last_reset_time).toBe(0)
+    expect(parsed.next_reset_time).toBe(0)
   })
 
   test('creates an Auto token that inherits the global order', () => {
@@ -150,6 +163,62 @@ describe('API key Auto group form mapping', () => {
     }
     expect(transformFormDataToPayload(nonAuto).auto_groups).toEqual([])
     expect(transformFormDataToPayload(nonAuto).cross_group_retry).toBe(false)
+  })
+
+  test('round-trips periodic quota reset settings without changing quota semantics', () => {
+    const resetApiKey = apiKeySchema.parse({
+      ...baseApiKey,
+      unlimited_quota: false,
+      remain_quota: 500_000,
+      used_quota: 250_000,
+      quota_reset_period: 'custom',
+      quota_reset_custom_seconds: 3_600,
+      last_reset_time: 1_700_000_000,
+      next_reset_time: 1_700_003_600,
+    })
+
+    const defaults = transformApiKeyToFormDefaults(resetApiKey)
+    expect(defaults.remain_quota_dollars).toBe(1)
+    expect(defaults.quota_reset_period).toBe('custom')
+    expect(defaults.quota_reset_custom_seconds).toBe(3_600)
+
+    const payload = transformFormDataToPayload(defaults)
+    expect(payload.remain_quota).toBe(500_000)
+    expect(payload.quota_reset_period).toBe('custom')
+    expect(payload.quota_reset_custom_seconds).toBe(3_600)
+
+    const metadataOnlyPayload = transformFormDataToPayload(defaults, {
+      includeRemainQuota: false,
+    })
+    expect(metadataOnlyPayload).not.toHaveProperty('remain_quota')
+  })
+
+  test('clears periodic reset settings when quota is unlimited', () => {
+    const values = {
+      ...getApiKeyFormDefaultValues(false),
+      unlimited_quota: true,
+      quota_reset_period: 'custom' as const,
+      quota_reset_custom_seconds: 3_600,
+    }
+
+    const payload = transformFormDataToPayload(values)
+    expect(payload.quota_reset_period).toBe('never')
+    expect(payload.quota_reset_custom_seconds).toBe(0)
+  })
+
+  test('requires positive custom reset seconds for limited quotas', () => {
+    const result = getApiKeyFormSchema(t).safeParse({
+      ...getApiKeyFormDefaultValues(false),
+      name: 'limited token',
+      unlimited_quota: false,
+      quota_reset_period: 'custom',
+      quota_reset_custom_seconds: 0,
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues[0]?.path).toEqual(['quota_reset_custom_seconds'])
+    expect(result.error.issues[0]?.message).toBe('Must be greater than 0')
   })
 
   test('rejects snapshots over the configured limit', () => {
