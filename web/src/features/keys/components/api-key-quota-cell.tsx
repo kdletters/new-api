@@ -22,10 +22,12 @@ import { QuotaDetailsPopover } from '@/components/quota-details-popover'
 import { Progress } from '@/components/ui/progress'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatQuotaWithCurrency, getCurrencyDisplay } from '@/lib/currency'
+import { formatTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { API_KEY_STATUS } from '../constants'
+import { formatApiKeyResetPeriod } from '../lib'
 import type { ApiKey } from '../types'
 
 type ApiKeyQuotaCellProps = {
@@ -42,6 +44,9 @@ export function ApiKeyQuotaCell(props: ApiKeyQuotaCellProps) {
   const used = props.apiKey.used_quota
   const remaining = props.apiKey.remain_quota
   const total = used + remaining
+  const quotaResetPeriod = props.apiKey.quota_reset_period || 'never'
+  const hasPeriodicReset =
+    !props.apiKey.unlimited_quota && quotaResetPeriod !== 'never'
   const hasProgress = !props.apiKey.unlimited_quota && total > 0
   const percentage = hasProgress
     ? Math.min(100, Math.max(0, (remaining / total) * 100))
@@ -86,6 +91,28 @@ export function ApiKeyQuotaCell(props: ApiKeyQuotaCellProps) {
       value: `${formattedPercentage}%`,
     })
   }
+  if (hasPeriodicReset) {
+    details.push({
+      label: t('Reset Cycle'),
+      value: formatApiKeyResetPeriod(props.apiKey, t),
+    })
+    details.push({
+      label: t('Next reset'),
+      value: formatTimestamp(props.apiKey.next_reset_time || 0),
+    })
+  }
+  let quotaDescription = t(
+    'Total = used + remaining. It is not an initial allocation or a periodic budget; changing the remaining quota changes the total and percentage.'
+  )
+  if (props.apiKey.unlimited_quota) {
+    quotaDescription = t(
+      'This API key has no quota limit. Requests still require available wallet or subscription quota.'
+    )
+  } else if (hasPeriodicReset) {
+    quotaDescription = t(
+      'Current total = used + remaining. Changing the remaining quota updates the total and percentage.'
+    )
+  }
 
   return (
     <QuotaDetailsPopover
@@ -96,15 +123,7 @@ export function ApiKeyQuotaCell(props: ApiKeyQuotaCellProps) {
           : triggerLabel
       }
       details={details}
-      description={
-        props.apiKey.unlimited_quota
-          ? t(
-              'This API key has no quota limit. Requests still require available wallet or subscription quota.'
-            )
-          : t(
-              'Total = used + remaining. It is not an initial allocation or a periodic budget; changing the remaining quota changes the total and percentage.'
-            )
-      }
+      description={quotaDescription}
       className={
         props.variant === 'card' ? 'space-y-2.5' : 'max-w-45 space-y-1.5'
       }
