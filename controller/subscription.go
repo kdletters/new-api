@@ -203,8 +203,15 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		}
 	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
+	if req.Plan.QuotaResetPeriod != model.SubscriptionResetCustom {
+		req.Plan.QuotaResetCustomSeconds = 0
+	}
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorT(c, "Custom reset cycle must be greater than 0 seconds")
+		return
+	}
+	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds > model.MaxQuotaResetCustomSeconds {
+		common.ApiErrorMsg(c, "自定义重置周期超出允许范围")
 		return
 	}
 	err := model.DB.Create(&req.Plan).Error
@@ -281,8 +288,15 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		}
 	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
+	if req.Plan.QuotaResetPeriod != model.SubscriptionResetCustom {
+		req.Plan.QuotaResetCustomSeconds = 0
+	}
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorT(c, "Custom reset cycle must be greater than 0 seconds")
+		return
+	}
+	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds > model.MaxQuotaResetCustomSeconds {
+		common.ApiErrorMsg(c, "自定义重置周期超出允许范围")
 		return
 	}
 
