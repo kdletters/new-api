@@ -555,6 +555,171 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
+func TestTokenQuotaResetScheduleCreateUpdateAndValidation(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	beforeCreate := model.GetDBTimestamp()
+	addBody := map[string]any{
+		"name":                       "scheduled-token",
+		"expired_time":               -1,
+		"remain_quota":               1000,
+		"unlimited_quota":            false,
+		"model_limits_enabled":       false,
+		"model_limits":               "",
+		"allow_ips":                  "",
+		"group":                      "default",
+		"quota_reset_period":         model.SubscriptionResetCustom,
+		"quota_reset_custom_seconds": 3600,
+		"last_reset_time":            1,
+		"next_reset_time":            1,
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", addBody, 1)
+	AddToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	afterCreate := model.GetDBTimestamp()
+
+	var token model.Token
+	require.NoError(t, db.Where("name = ?", "scheduled-token").First(&token).Error)
+	require.Equal(t, model.SubscriptionResetCustom, token.QuotaResetPeriod)
+	require.EqualValues(t, 3600, token.QuotaResetCustomSeconds)
+	require.GreaterOrEqual(t, token.LastResetTime, beforeCreate)
+	require.LessOrEqual(t, token.LastResetTime, afterCreate)
+	require.Equal(t, token.LastResetTime+3600, token.NextResetTime)
+
+	lastResetTime := token.LastResetTime
+	nextResetTime := token.NextResetTime
+	updateBody := map[string]any{
+		"id":                   token.Id,
+		"name":                 "renamed-scheduled-token",
+		"expired_time":         -1,
+		"remain_quota":         1000,
+		"unlimited_quota":      false,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"allow_ips":            "",
+		"group":                "default",
+		"cross_group_retry":    false,
+	}
+	ctx, recorder = newAuthenticatedContext(t, http.MethodPut, "/api/token/", updateBody, 1)
+	UpdateToken(ctx)
+	response = decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	require.NoError(t, db.First(&token, token.Id).Error)
+	assert.Equal(t, "renamed-scheduled-token", token.Name)
+	assert.Equal(t, model.SubscriptionResetCustom, token.QuotaResetPeriod)
+	assert.EqualValues(t, 3600, token.QuotaResetCustomSeconds)
+	assert.Equal(t, lastResetTime, token.LastResetTime)
+	assert.Equal(t, nextResetTime, token.NextResetTime)
+
+	updateBody["quota_reset_period"] = model.SubscriptionResetDaily
+	ctx, recorder = newAuthenticatedContext(t, http.MethodPut, "/api/token/", updateBody, 1)
+	UpdateToken(ctx)
+	response = decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	require.NoError(t, db.First(&token, token.Id).Error)
+	assert.Equal(t, model.SubscriptionResetDaily, token.QuotaResetPeriod)
+	assert.Zero(t, token.QuotaResetCustomSeconds)
+	assert.Greater(t, token.NextResetTime, token.LastResetTime)
+
+	updateBody["quota_reset_period"] = model.SubscriptionResetCustom
+	updateBody["quota_reset_custom_seconds"] = 7200
+	ctx, recorder = newAuthenticatedContext(t, http.MethodPut, "/api/token/", updateBody, 1)
+	UpdateToken(ctx)
+	response = decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	require.NoError(t, db.First(&token, token.Id).Error)
+	assert.Equal(t, model.SubscriptionResetCustom, token.QuotaResetPeriod)
+	assert.EqualValues(t, 7200, token.QuotaResetCustomSeconds)
+	assert.Equal(t, token.LastResetTime+7200, token.NextResetTime)
+
+	for _, tc := range []struct {
+		name    string
+		period  string
+		seconds int64
+	}{
+		{name: "custom requires positive seconds", period: model.SubscriptionResetCustom, seconds: 0},
+		{name: "negative seconds", period: model.SubscriptionResetNever, seconds: -1},
+		{name: "overflow seconds", period: model.SubscriptionResetCustom, seconds: model.MaxQuotaResetCustomSeconds + 1},
+		{name: "invalid period", period: "yearly", seconds: 3600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{
+				"id":                         token.Id,
+				"name":                       token.Name,
+				"expired_time":               -1,
+				"remain_quota":               1000,
+				"unlimited_quota":            false,
+				"model_limits_enabled":       false,
+				"model_limits":               "",
+				"allow_ips":                  "",
+				"group":                      "default",
+				"quota_reset_period":         tc.period,
+				"quota_reset_custom_seconds": tc.seconds,
+			}
+			ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+			UpdateToken(ctx)
+			assert.False(t, decodeAPIResponse(t, recorder).Success)
+		})
+	}
+}
+
+func TestAddUnlimitedTokenForcesQuotaResetNever(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	body := map[string]any{
+		"name":                       "unlimited-scheduled-token",
+		"expired_time":               -1,
+		"remain_quota":               1000,
+		"unlimited_quota":            true,
+		"model_limits_enabled":       false,
+		"model_limits":               "",
+		"allow_ips":                  "",
+		"group":                      "default",
+		"quota_reset_period":         model.SubscriptionResetDaily,
+		"quota_reset_custom_seconds": 3600,
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	AddToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var token model.Token
+	require.NoError(t, db.Where("name = ?", "unlimited-scheduled-token").First(&token).Error)
+	assert.Equal(t, model.SubscriptionResetNever, token.QuotaResetPeriod)
+	assert.Zero(t, token.QuotaResetCustomSeconds)
+	assert.Zero(t, token.LastResetTime)
+	assert.Zero(t, token.NextResetTime)
+}
+
+func TestUpdateTokenWithoutRemainQuotaPreservesFreshQuota(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "metadata-only-update", "metadata-only-key")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"unlimited_quota": false,
+		"remain_quota":    150,
+		"used_quota":      0,
+		"status":          common.TokenStatusEnabled,
+	}).Error)
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "renamed-without-quota",
+		"expired_time":         -1,
+		"unlimited_quota":      false,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "default",
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	UpdateToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var updated model.Token
+	require.NoError(t, db.First(&updated, token.Id).Error)
+	assert.Equal(t, "renamed-without-quota", updated.Name)
+	assert.Equal(t, 150, updated.RemainQuota)
+}
+
 func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "owned-token", "owner1234token5678")
