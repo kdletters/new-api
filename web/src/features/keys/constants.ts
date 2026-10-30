@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type StatusBadgeProps } from '@/components/status-badge'
+import type { StatusBadgeProps } from '@/components/status-badge'
+
+import type { ApiKeyQuotaResetPeriod } from './types'
 
 // ============================================================================
 // API Key Status Configuration
@@ -65,6 +67,17 @@ export const API_KEY_STATUS_OPTIONS = Object.values(API_KEY_STATUSES).map(
     value: String(config.value),
   })
 )
+
+export const API_KEY_QUOTA_RESET_PERIOD_OPTIONS: ReadonlyArray<{
+  value: ApiKeyQuotaResetPeriod
+  label: string
+}> = [
+  { value: 'never', label: 'No Reset' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'custom', label: 'Custom (seconds)' },
+]
 
 // ============================================================================
 // Default Values
