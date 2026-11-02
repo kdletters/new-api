@@ -221,6 +221,112 @@ func TestDoAwsClientRequest_ForwardsThinkingBlockBindingAndBetaList(t *testing.T
 	assert.JSONEq(t, `{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"}}`, string(payload.Thinking))
 }
 
+func TestAwsClaudeCompatibilityNormalization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	requestBody := `{
+		"max_tokens": 128,
+		"system": [
+			{"type":"input_text","text":"system text"},
+			{"type":"tool_addition","tool":{"type":"tool_reference","name":"lookup"}},
+			{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}
+		],
+		"messages": [{"role":"user","content":[
+			{"type":"output_text","text":"hello"},
+			{"type":"tool_removal","tool":{"type":"tool_reference","name":"lookup"}},
+			{"type":"tool_use","id":"tool-1","name":"lookup","input":"{\"q\":\"x\"}"},
+			{"type":"tool_result","tool_use_id":"tool-1","content":[{"type":"input_text","text":"result"}]}
+		]}],
+		"tools": [{"name":"lookup","input_schema":{"type":"object"},"strict":true}]
+	}`
+
+	tests := []struct {
+		name       string
+		model      string
+		wantStrict bool
+	}{
+		{name: "new Bedrock Claude models reject strict", model: "claude-opus-5-5"},
+		{name: "older models keep strict", model: "claude-sonnet-4-6", wantStrict: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: tt.model,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ApiKey:            "access-key|secret-key|us-east-1",
+					UpstreamModelName: tt.model,
+				},
+			}
+			adaptor := &Adaptor{}
+			_, err := doAwsClientRequest(ctx, info, adaptor, bytes.NewBufferString(requestBody))
+			require.NoError(t, err)
+
+			awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
+			require.True(t, ok)
+			var payload struct {
+				System   []map[string]any `json:"system"`
+				Messages []struct {
+					Content []map[string]any `json:"content"`
+				} `json:"messages"`
+				Tools []map[string]any `json:"tools"`
+			}
+			require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
+			require.Len(t, payload.System, 2)
+			assert.Equal(t, "system text", payload.System[0]["text"])
+			assert.Equal(t, "Tool added: lookup", payload.System[1]["text"])
+			require.Len(t, payload.Messages, 1)
+			require.Len(t, payload.Messages[0].Content, 4)
+			assert.Equal(t, "hello", payload.Messages[0].Content[0]["text"])
+			assert.Equal(t, "Tool removed: lookup", payload.Messages[0].Content[1]["text"])
+			assert.Equal(t, map[string]any{"q": "x"}, payload.Messages[0].Content[2]["input"])
+			toolResultContent, ok := payload.Messages[0].Content[3]["content"].([]any)
+			require.True(t, ok)
+			require.Len(t, toolResultContent, 1)
+			toolResultBlock, ok := toolResultContent[0].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "text", toolResultBlock["type"])
+			assert.Equal(t, "result", toolResultBlock["text"])
+			require.Len(t, payload.Tools, 1)
+			if tt.wantStrict {
+				assert.Equal(t, true, payload.Tools[0]["strict"])
+			} else {
+				assert.NotContains(t, payload.Tools[0], "strict")
+			}
+		})
+	}
+}
+
+func TestNormalizeAwsClaudePayloadMapPreservesUnrelatedFields(t *testing.T) {
+	data := map[string]json.RawMessage{
+		"metadata": json.RawMessage(`{"keep":"client-bytes"}`),
+		"system":   json.RawMessage(`[{"type":"input_text","text":"system text"},{"type":"image","source":{}}]`),
+		"messages": json.RawMessage(`[{"role":"user","content":[{"type":"output_text","text":"hello"},{"type":"tool_use","id":"tool-1","name":"lookup","input":"{\"q\":\"x\"}"}]}]`),
+		"tools":    json.RawMessage(`[{"name":"lookup","input_schema":{"type":"object"},"strict":true}]`),
+	}
+
+	require.NoError(t, normalizeAwsClaudePayloadMap(data, "claude-opus-5-5"))
+	assert.JSONEq(t, `{"keep":"client-bytes"}`, string(data["metadata"]))
+
+	var payload struct {
+		System   []map[string]any `json:"system"`
+		Messages []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+		Tools []map[string]any `json:"tools"`
+	}
+	require.NoError(t, common.Unmarshal(data["system"], &payload.System))
+	require.NoError(t, common.Unmarshal(data["messages"], &payload.Messages))
+	require.NoError(t, common.Unmarshal(data["tools"], &payload.Tools))
+	require.Len(t, payload.System, 1)
+	assert.Equal(t, "system text", payload.System[0]["text"])
+	require.Len(t, payload.Messages, 1)
+	require.Len(t, payload.Messages[0].Content, 2)
+	assert.Equal(t, map[string]any{"q": "x"}, payload.Messages[0].Content[1]["input"])
+	require.Len(t, payload.Tools, 1)
+	assert.NotContains(t, payload.Tools[0], "strict")
+}
+
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
 	t.Cleanup(func() {

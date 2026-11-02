@@ -329,7 +329,7 @@ describe('API keys mutate drawer user quota query switch', () => {
   test('sends false for a new key after the switch, which starts on, is turned off', async () => {
     const createdPayloads: Array<Record<string, unknown>> = []
     installApiFixtures(createdPayloads)
-    await renderCreateDrawer()
+    await renderDrawer()
 
     fireEvent.click(findButton('Advanced Settings', true))
     const quotaQuerySwitch = await screen.findByRole('switch', {
@@ -418,6 +418,7 @@ describe('API keys mutate drawer quota reset integration', () => {
       model_limits_enabled: false,
       model_limits: '',
       allow_ips: '',
+      allow_user_quota_query: true,
     }
     const updatedPayloads: Array<Record<string, unknown>> = []
     installApiFixtures([], { apiKey: existingApiKey, updatedPayloads })

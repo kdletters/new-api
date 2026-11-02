@@ -18,7 +18,7 @@ import (
 func TestFormatRequestPreservesPerMessageOutputConfig(t *testing.T) {
 	const body = `{"model":"anthropic.claude-opus-5-5-v1:0","max_tokens":4096,"messages":[{"role":"user","content":"Plan a migration"},{"role":"system","content":[],"output_config":{"effort":"high"}},{"role":"user","content":"Summarize it"}]}`
 
-	request, err := formatRequest(strings.NewReader(body), http.Header{})
+	request, err := formatRequest(strings.NewReader(body), http.Header{}, "anthropic.claude-opus-5-5-v1:0")
 	require.NoError(t, err)
 	require.NotNil(t, request)
 

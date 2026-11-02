@@ -142,7 +142,7 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 		a.AwsReq = awsReq
 		return nil, nil
 	} else {
-		awsClaudeReq, err := formatRequest(requestBody, requestHeader)
+		awsClaudeReq, err := formatRequest(requestBody, requestHeader, awsModelId)
 		if err != nil {
 			return nil, types.NewError(errors.Wrap(err, "format aws request fail"), types.ErrorCodeBadRequestBody)
 		}
@@ -153,7 +153,7 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 				Accept:      aws.String("application/json"),
 				ContentType: aws.String("application/json"),
 			}
-			awsReq.Body, err = buildAwsRequestBody(c, info, awsClaudeReq)
+			awsReq.Body, err = buildAwsRequestBody(c, info, awsModelId, awsClaudeReq)
 			if err != nil {
 				return nil, types.NewError(errors.Wrap(err, "marshal aws request fail"), types.ErrorCodeBadRequestBody)
 			}
@@ -165,7 +165,7 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 				Accept:      aws.String("application/json"),
 				ContentType: aws.String("application/json"),
 			}
-			awsReq.Body, err = buildAwsRequestBody(c, info, awsClaudeReq)
+			awsReq.Body, err = buildAwsRequestBody(c, info, awsModelId, awsClaudeReq)
 			if err != nil {
 				return nil, types.NewError(errors.Wrap(err, "marshal aws request fail"), types.ErrorCodeBadRequestBody)
 			}
@@ -176,7 +176,7 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 }
 
 // buildAwsRequestBody prepares the payload for AWS requests, applying passthrough rules when enabled.
-func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsClaudeReq any) ([]byte, error) {
+func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsModelID string, awsClaudeReq any) ([]byte, error) {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
@@ -193,6 +193,9 @@ func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsClaudeR
 		}
 		delete(data, "model")
 		delete(data, "stream")
+		if err := normalizeAwsClaudePayloadMap(data, awsModelID); err != nil {
+			return nil, errors.Wrap(err, "normalize pass-through request body fail")
+		}
 		return common.Marshal(data)
 	}
 	return common.Marshal(awsClaudeReq)
