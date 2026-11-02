@@ -1072,6 +1072,7 @@
     "Channel {{name}}": "渠道 {{name}}",
     "Channel {{name}} model {{model}}": "渠道 {{name}} 模型 {{model}}",
     "Channel Affinity": "渠道亲和性",
+    "Channel affinity failover": "渠道亲和故障转移",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "渠道亲和性会基于从请求上下文或 JSON Body 提取的 Key，优先复用上一次成功的渠道。",
     "Channel affinity settings are not initialized": "渠道亲和性设置未初始化",
     "Channel Affinity: Upstream Cache Hit": "渠道亲和性：上游缓存命中",

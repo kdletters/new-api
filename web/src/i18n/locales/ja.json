@@ -1072,6 +1072,7 @@
     "Channel {{name}}": "チャネル {{name}}",
     "Channel {{name}} model {{model}}": "チャネル {{name}} モデル {{model}}",
     "Channel Affinity": "チャネルアフィニティ",
+    "Channel affinity failover": "チャネルアフィニティのフェイルオーバー",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "チャネルアフィニティは、リクエストコンテキストまたは JSON Body から抽出したキーに基づいて、前回成功したチャネルを優先的に再利用します。",
     "Channel affinity settings are not initialized": "チャネルアフィニティ設定が初期化されていません",
     "Channel Affinity: Upstream Cache Hit": "チャネルアフィニティ：上流キャッシュヒット",

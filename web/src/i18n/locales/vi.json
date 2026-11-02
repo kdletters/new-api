@@ -1072,6 +1072,7 @@
     "Channel {{name}}": "Kênh {{name}}",
     "Channel {{name}} model {{model}}": "Kênh {{name}} mô hình {{model}}",
     "Channel Affinity": "Ưu tiên kênh",
+    "Channel affinity failover": "Chuyển kênh ưu tiên khi lỗi",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "Ưu tiên kênh sẽ sử dụng lại kênh thành công gần nhất dựa trên các khóa được trích xuất từ ngữ cảnh yêu cầu hoặc JSON body.",
     "Channel affinity settings are not initialized": "Cài đặt ưu tiên kênh chưa được khởi tạo",
     "Channel Affinity: Upstream Cache Hit": "Ưu tiên kênh: Cache hit từ upstream",

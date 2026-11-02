@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
@@ -227,6 +228,90 @@ func TestDecideRelayRetryReasons(t *testing.T) {
 			decision := DecideRelayRetry(c, tc.err, tc.retries)
 			assert.Equal(t, tc.want, decision)
 			assert.Equal(t, tc.want.Action == "retry", ShouldRetryRelayError(c, tc.err, tc.retries))
+		})
+	}
+}
+
+func TestDecideRelayRetryFailoverForAffinityChannel(t *testing.T) {
+	previousRetryCodes := operation_setting.AutomaticRetryStatusCodesToString()
+	require.NoError(t, operation_setting.AutomaticRetryStatusCodesFromString("500-502"))
+	t.Cleanup(func() {
+		require.NoError(t, operation_setting.AutomaticRetryStatusCodesFromString(previousRetryCodes))
+	})
+
+	upstream := func(status int) *types.NewAPIError {
+		return types.NewOpenAIError(errors.New("upstream"), types.ErrorCodeBadResponseStatusCode, status)
+	}
+	affinityContext := func(mode string, channelUsed bool) *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		state := RequestPolicy(c)
+		state.SessionMode = mode
+		state.SessionModeSource = "session_rule"
+		if channelUsed {
+			setChannelAffinityContext(c, channelAffinityMeta{
+				RuleName:   "session",
+				SkipRetry:  mode == "strict",
+				UsingGroup: "default",
+				ModelName:  "gpt-5",
+			})
+			MarkChannelAffinityUsed(c, "default", 20)
+		}
+		return c
+	}
+
+	for _, tc := range []struct {
+		name        string
+		status      int
+		retries     int
+		mode        string
+		channelUsed bool
+		want        PolicyDecision
+	}{
+		{
+			name: "prefer fails over on unlisted server error", status: http.StatusServiceUnavailable,
+			retries: 1, mode: "prefer", channelUsed: true,
+			want: PolicyDecision{Action: "retry", Reason: "affinity_failover", Source: "session_rule"},
+		},
+		{
+			name: "prefer fails over on unlisted rate limit", status: http.StatusTooManyRequests,
+			retries: 1, mode: "prefer", channelUsed: true,
+			want: PolicyDecision{Action: "retry", Reason: "affinity_failover", Source: "session_rule"},
+		},
+		{
+			name: "configured status keeps global reason", status: http.StatusInternalServerError,
+			retries: 1, mode: "prefer", channelUsed: true,
+			want: PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"},
+		},
+		{
+			name: "client error does not fail over", status: http.StatusBadRequest,
+			retries: 1, mode: "prefer", channelUsed: true,
+			want: PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"},
+		},
+		{
+			name: "hard retry exclusion is preserved", status: http.StatusGatewayTimeout,
+			retries: 1, mode: "prefer", channelUsed: true,
+			want: PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"},
+		},
+		{
+			name: "without an affinity channel normal rules apply", status: http.StatusServiceUnavailable,
+			retries: 1, mode: "prefer", channelUsed: false,
+			want: PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"},
+		},
+		{
+			name: "retry budget still applies", status: http.StatusServiceUnavailable,
+			retries: 0, mode: "prefer", channelUsed: true,
+			want: PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"},
+		},
+		{
+			name: "strict affinity still stops", status: http.StatusServiceUnavailable,
+			retries: 1, mode: "strict", channelUsed: true,
+			want: PolicyDecision{Action: "stop", Reason: "strict_session", Source: "session_rule"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := affinityContext(tc.mode, tc.channelUsed)
+			assert.Equal(t, tc.want, DecideRelayRetry(c, upstream(tc.status), tc.retries))
 		})
 	}
 }

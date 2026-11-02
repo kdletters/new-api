@@ -1072,6 +1072,7 @@
     "Channel {{name}}": "Канал {{name}}",
     "Channel {{name}} model {{model}}": "Канал {{name}}, модель {{model}}",
     "Channel Affinity": "Привязка к каналу",
+    "Channel affinity failover": "Переключение привязки канала",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "Привязка к каналу повторно использует последний успешный канал на основе ключей, извлечённых из контекста запроса или тела JSON.",
     "Channel affinity settings are not initialized": "Настройки привязки к каналу не инициализированы",
     "Channel Affinity: Upstream Cache Hit": "Привязка к каналу: попадание в кэш upstream",

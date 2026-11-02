@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -52,6 +53,17 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	}
 	if operation_setting.ShouldRetryByStatusCode(code) {
 		return PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}
+	}
+	// A preferred affinity channel must be able to fail over on upstream
+	// availability errors even if the generic retry list omits the status code.
+	// Client errors and hard system exclusions above remain non-retryable.
+	if c != nil && c.GetBool(ginKeyChannelAffinityChannelUsed) && RequestPolicy(c).SessionMode == "prefer" &&
+		(code == http.StatusTooManyRequests || code >= http.StatusInternalServerError) {
+		source := RequestPolicy(c).SessionModeSource
+		if source == "" {
+			source = "session_rule"
+		}
+		return PolicyDecision{Action: "retry", Reason: "affinity_failover", Source: source}
 	}
 	return PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"}
 }

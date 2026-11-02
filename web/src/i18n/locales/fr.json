@@ -1072,6 +1072,7 @@
     "Channel {{name}}": "Canal {{name}}",
     "Channel {{name}} model {{model}}": "Canal {{name}} modèle {{model}}",
     "Channel Affinity": "Affinité de canal",
+    "Channel affinity failover": "Basculement de l'affinité de canal",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "L'affinité de canal réutilise le dernier canal ayant réussi, en se basant sur les clés extraites du contexte de la requête ou du corps JSON.",
     "Channel affinity settings are not initialized": "Les paramètres d'affinité de canal ne sont pas initialisés",
     "Channel Affinity: Upstream Cache Hit": "Affinité de canal : hit de cache en amont",
