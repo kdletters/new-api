@@ -331,6 +331,29 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	if err != nil {
 		return nil, err
 	}
+	outcome := info.StreamStatus.OutcomeSnapshot()
+	clientEnded := c.Request.Context().Err() != nil || outcome.EndReason == relaycommon.StreamEndReasonClientGone || outcome.EndReason == relaycommon.StreamEndReasonPingFail
+	terminalReached := outcome.Response == relaycommon.ResponseOutcomeCompleted || outcome.Response == relaycommon.ResponseOutcomeIncomplete
+	if !clientEnded && (!terminalReached || outcome.HasErrors || !info.StreamStatus.ProtocolSucceeded()) {
+		statusCode := http.StatusBadGateway
+		message := "upstream stream ended without a terminal Claude event"
+		switch outcome.EndReason {
+		case relaycommon.StreamEndReasonTimeout:
+			statusCode = http.StatusGatewayTimeout
+			message = "upstream stream timed out before a terminal Claude event"
+		case relaycommon.StreamEndReasonScannerErr:
+			message = "upstream stream failed while reading the Claude response"
+		case relaycommon.StreamEndReasonPanic:
+			statusCode = http.StatusInternalServerError
+			message = "upstream stream failed before a terminal Claude event"
+		}
+		streamErr := types.WithClaudeError(types.ClaudeError{
+			Type:    "api_error",
+			Message: message,
+		}, statusCode, types.ErrOptionWithSkipRetry())
+		info.StreamStatus.MarkFailed(string(streamErr.GetErrorCode()), string(streamErr.GetErrorType()), streamErr.StatusCode)
+		return nil, streamErr
+	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 	return claudeInfo.Usage, nil

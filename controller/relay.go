@@ -75,9 +75,16 @@ func writeRelayStreamError(c *gin.Context, relayFormat types.RelayFormat, apiErr
 	if relayFormat != types.RelayFormatClaude {
 		return false
 	}
+	streamStatus, ok := common.GetContextKeyType[*relaycommon.StreamStatus](c, constant.ContextKeyResponseStreamStatus)
+	if !ok || streamStatus == nil {
+		streamStatus = relaycommon.NewStreamStatus()
+		common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, streamStatus)
+	}
+	claudeError := apiErr.ToClaudeError()
+	streamStatus.MarkFailed(string(apiErr.GetErrorCode()), claudeError.Type, apiErr.StatusCode)
 	payload, err := common.Marshal(gin.H{
 		"type":  "error",
-		"error": apiErr.ToClaudeError(),
+		"error": claudeError,
 	})
 	if err != nil {
 		logger.LogError(c, "failed to marshal Claude stream error: "+err.Error())

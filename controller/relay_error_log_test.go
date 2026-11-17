@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
@@ -110,6 +111,11 @@ func TestWriteRelayStreamErrorAfterHeadersWritten(t *testing.T) {
 	written := writeRelayStreamError(ctx, types.RelayFormatClaude, apiErr)
 
 	require.True(t, written)
+	streamStatus, ok := common.GetContextKeyType[*relaycommon.StreamStatus](ctx, constant.ContextKeyResponseStreamStatus)
+	require.True(t, ok)
+	require.NotNil(t, streamStatus)
+	assert.True(t, streamStatus.ResponseFailed())
+	assert.Equal(t, http.StatusBadGateway, streamStatus.OutcomeSnapshot().ErrorStatus)
 	assert.Contains(t, recorder.Body.String(), "event: error")
 	assert.Contains(t, recorder.Body.String(), `"type":"error"`)
 	assert.Contains(t, recorder.Body.String(), `"message":"upstream failed"`)
