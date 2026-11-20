@@ -157,6 +157,52 @@ func TestStreamStatus_IsNormalEnd_NilSafe(t *testing.T) {
 	assert.True(t, s.IsNormalEnd())
 }
 
+func TestStreamStatus_ProtocolSucceeded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		reason StreamEndReason
+		mark   func(*StreamStatus)
+		want   bool
+	}{
+		{name: "legacy EOF is accepted", reason: StreamEndReasonEOF, want: true},
+		{name: "required terminal missing on EOF", reason: StreamEndReasonEOF, mark: (*StreamStatus).RequireTerminal, want: false},
+		{name: "required terminal missing on handler stop", reason: StreamEndReasonHandlerStop, mark: (*StreamStatus).RequireTerminal, want: false},
+		{name: "done satisfies required terminal", reason: StreamEndReasonDone, mark: (*StreamStatus).RequireTerminal, want: true},
+		{name: "completed satisfies required terminal", reason: StreamEndReasonEOF, mark: func(s *StreamStatus) {
+			s.RequireTerminal()
+			s.MarkCompleted()
+		}, want: true},
+		{name: "incomplete is an explicit terminal", reason: StreamEndReasonEOF, mark: func(s *StreamStatus) {
+			s.RequireTerminal()
+			s.MarkIncomplete("max_tokens")
+		}, want: true},
+		{name: "failed response", reason: StreamEndReasonDone, mark: func(s *StreamStatus) { s.MarkFailed("server_error", "server_error", 500) }, want: false},
+		{name: "soft error", reason: StreamEndReasonDone, mark: func(s *StreamStatus) { s.RecordError("bad event") }, want: false},
+		{name: "timeout", reason: StreamEndReasonTimeout, want: false},
+		{name: "client gone", reason: StreamEndReasonClientGone, want: false},
+		{name: "cancelled terminal is not an upstream failure", reason: StreamEndReasonEOF, mark: (*StreamStatus).MarkCancelled, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := NewStreamStatus()
+			status.SetEndReason(tt.reason, nil)
+			if tt.mark != nil {
+				tt.mark(status)
+			}
+			assert.Equal(t, tt.want, status.ProtocolSucceeded())
+		})
+	}
+}
+
+func TestStreamStatus_ProtocolSucceeded_NilSafe(t *testing.T) {
+	t.Parallel()
+	var s *StreamStatus
+	assert.True(t, s.ProtocolSucceeded())
+}
+
 func TestStreamStatus_Summary(t *testing.T) {
 	t.Parallel()
 

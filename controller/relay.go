@@ -115,11 +115,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError(upstreamURLs...))
 			case types.RelayFormatClaude:
+				c.Header("Content-Type", "application/json; charset=utf-8")
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"type":  "error",
 					"error": newAPIError.ToClaudeError(upstreamURLs...),
 				})
 			default:
+				c.Header("Content-Type", "application/json; charset=utf-8")
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"error": newAPIError.ToOpenAIError(upstreamURLs...),
 				})

@@ -1,11 +1,14 @@
 package claude
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -249,6 +252,136 @@ func TestFormatClaudeResponseInfo_NilClaudeInfo(t *testing.T) {
 	ok := FormatClaudeResponseInfo(claudeResponse, nil, nil)
 	if ok {
 		t.Error("expected false for nil claudeInfo")
+	}
+}
+
+func TestHandleStreamResponseDataMapsClaudeErrorStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		errorType string
+		want      int
+	}{
+		{errorType: "invalid_request_error", want: http.StatusBadRequest},
+		{errorType: "rate_limit_error", want: http.StatusTooManyRequests},
+		{errorType: "overloaded_error", want: http.StatusServiceUnavailable},
+		{errorType: "api_error", want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.errorType, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat:  types.RelayFormatClaude,
+				StreamStatus: relaycommon.NewStreamStatus(),
+			}
+			event := fmt.Sprintf(`{"type":"error","error":{"type":%q,"message":"blocked"}}`, tc.errorType)
+
+			apiErr := HandleStreamResponseData(c, info, &ClaudeResponseInfo{Usage: &dto.Usage{}}, event)
+
+			require.NotNil(t, apiErr)
+			assert.Equal(t, tc.want, apiErr.StatusCode)
+			assert.Equal(t, types.ErrorCode(tc.errorType), apiErr.GetErrorCode())
+		})
+	}
+}
+
+func TestClaudeStreamHandlerRejectsIncompleteUpstreamStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "empty response", body: "Request blocked by the refusal guard"},
+		{name: "done without terminal", body: "data: [DONE]\n\n"},
+		{name: "message start then EOF", body: `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n"},
+		{name: "message start then done", body: `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\ndata: [DONE]\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{
+				IsStream:    true,
+				RelayFormat: types.RelayFormatClaude,
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+			}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+
+			usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+			require.Nil(t, usage)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+			assert.Equal(t, types.ErrorCode("api_error"), apiErr.GetErrorCode())
+			assert.True(t, types.IsSkipRetryError(apiErr))
+			require.NotNil(t, info.StreamStatus)
+			assert.True(t, info.StreamStatus.ResponseFailed())
+		})
+	}
+}
+
+func TestClaudeStreamHandlerTerminalTransportOutcomes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
+
+	for _, tc := range []struct {
+		name    string
+		body    func() io.Reader
+		wantErr bool
+	}{
+		{
+			name: "complete stream",
+			body: func() io.Reader { return strings.NewReader("data: {\"type\":\"message_stop\"}\n\n") },
+		},
+		{
+			name: "scanner error after terminal",
+			body: func() io.Reader {
+				return io.MultiReader(
+					strings.NewReader("data: {\"type\":\"message_stop\"}\n\n"),
+					iotest.ErrReader(errors.New("upstream connection failed")),
+				)
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{
+				IsStream:    true,
+				RelayFormat: types.RelayFormatClaude,
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+			}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(tc.body()),
+			}
+
+			usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+			require.NotNil(t, info.StreamStatus)
+			if tc.wantErr {
+				require.Nil(t, usage)
+				require.NotNil(t, apiErr)
+				assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+				assert.True(t, info.StreamStatus.ResponseFailed())
+				return
+			}
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, string(relaycommon.ResponseOutcomeCompleted), info.StreamStatus.ResponseOutcome())
+		})
 	}
 }
 

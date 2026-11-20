@@ -17,6 +17,30 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestGetRequestURLResponsesUsesV1Path(t *testing.T) {
+	const baseURL = "https://gateway.example"
+	for _, tc := range []struct {
+		name        string
+		relayFormat types.RelayFormat
+		relayMode   int
+		want        string
+	}{
+		{"responses", types.RelayFormatOpenAIResponses, constant.RelayModeResponses, baseURL + "/v1/responses"},
+		{"chat completions", types.RelayFormatOpenAI, constant.RelayModeChatCompletions, baseURL + "/v1/chat/completions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				RelayFormat: tc.relayFormat,
+				RelayMode:   tc.relayMode,
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: baseURL},
+			}
+			got, err := (&Adaptor{}).GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // The -none/-low/-max tails of deepseek-flash and deepseek-v4-* reach DeepSeek
 // as its own thinking switch and effort in each upstream format, with the base
 // name; a bare name keeps DeepSeek's default, and a blacklisted name is sent

@@ -82,6 +82,7 @@ import {
   getBalanceVariant,
   getChannelTypeIcon,
   getChannelTypeLabel,
+  getKnownChannelBalance,
   getResponseTimeConfig,
   isMultiKeyChannel,
   parseModelsList,
@@ -395,7 +396,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
   const layout = useContext(ChannelRowActionsLayoutContext)
   const { sensitiveVisible, setCurrentRow, setOpen } = useChannels()
   const isTagRow = isTagAggregateRow(channel)
-  const balance = channel.balance || 0
+  const balance = getKnownChannelBalance(channel)
   const usedQuota = channel.used_quota || 0
   const [isUpdating, setIsUpdating] = useState(false)
   const [rawBalanceResponse, setRawBalanceResponse] = useState<string | null>(
@@ -483,7 +484,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
   }
 
   // Regular channel row: show used and remaining with click to update
-  const variant = getBalanceVariant(balance)
+  const variant = balance === null ? 'neutral' : getBalanceVariant(balance)
   const isInferenceChannel =
     channel.type === CHANNEL_TYPE_VLLM || channel.type === CHANNEL_TYPE_SGLANG
   const inferenceStatusLabel =

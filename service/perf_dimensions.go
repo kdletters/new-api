@@ -36,7 +36,7 @@ func IsFinalRelayChannelAttemptSuccessful(relayInfo *relaycommon.RelayInfo) bool
 	if relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
 		return true
 	}
-	return relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors()
+	return relayInfo.StreamStatus.ProtocolSucceeded()
 }
 
 func IsFinalRelayRequestSuccessful(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
@@ -52,7 +52,7 @@ func IsFinalRelayRequestSuccessful(ctx *gin.Context, relayInfo *relaycommon.Rela
 	if relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
 		return false
 	}
-	return IsFinalRelayChannelAttemptSuccessful(relayInfo)
+	return relayInfo.StreamStatus.ProtocolSucceeded()
 }
 
 func RecordFinalRelayDimensionOutcome(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, success bool) {

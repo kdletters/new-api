@@ -36,7 +36,7 @@ import { handleServerError } from '@/lib/handle-server-error'
 import { createServerError } from '@/lib/server-error-message'
 
 import { getCodexUsage, updateChannelBalance } from '../../api'
-import { channelsQueryKeys } from '../../lib'
+import { channelsQueryKeys, getKnownChannelBalance } from '../../lib'
 import { useChannels } from '../channels-provider'
 import {
   CodexUsageDialog,
@@ -91,6 +91,12 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
   }, [props.open, isCodex])
 
   if (!currentRow) return null
+
+  const knownBalance = balance ?? getKnownChannelBalance(currentRow)
+  let balanceTone: 'neutral' | 'success' | 'destructive' = 'neutral'
+  if (knownBalance !== null) {
+    balanceTone = knownBalance < 0 ? 'destructive' : 'success'
+  }
 
   const handleQueryBalance = async () => {
     setIsQuerying(true)
@@ -209,15 +215,13 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
             {/* Current Balance Display */}
             <div className='bg-muted/50 rounded-lg border p-4'>
               <div className='text-muted-foreground mb-2 flex items-center gap-2 text-sm'>
-                <IconBadge tone='success' size='xs'>
+                <IconBadge tone={balanceTone} size='xs'>
                   <DollarSign />
                 </IconBadge>
                 <span>{t('Current Balance')}</span>
               </div>
               <div className='text-2xl font-bold'>
-                {balance !== null
-                  ? formatBalance(balance)
-                  : formatBalance(currentRow.balance)}
+                {knownBalance !== null ? formatBalance(knownBalance) : '-'}
               </div>
               <div className='text-muted-foreground mt-2 text-xs'>
                 {t('Last updated:')}{' '}

@@ -188,6 +188,24 @@ func (s *StreamStatus) OutcomeSnapshot() StreamOutcome {
 	}
 }
 
+// ProtocolSucceeded reports whether the transport ended cleanly and the
+// protocol reached an acceptable terminal state. EOF remains valid for legacy
+// streams that do not require an explicit terminal event. Client cancellation
+// is not treated as an upstream protocol failure.
+func (s *StreamStatus) ProtocolSucceeded() bool {
+	if s == nil {
+		return true
+	}
+	outcome := s.OutcomeSnapshot()
+	if !s.IsNormalEnd() || outcome.HasErrors || outcome.Response == ResponseOutcomeFailed {
+		return false
+	}
+	if outcome.ExpectsTerminal && outcome.Response == ResponseOutcomeUnknown && outcome.EndReason != StreamEndReasonDone {
+		return false
+	}
+	return true
+}
+
 func (s *StreamStatus) HasErrors() bool {
 	if s == nil {
 		return false

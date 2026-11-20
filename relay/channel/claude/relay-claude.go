@@ -82,6 +82,29 @@ func patchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) strin
 	return relayconvert.PatchClaudeMessageDeltaUsageData(data, usage)
 }
 
+func claudeErrorStatusCode(errorType string) int {
+	switch strings.ToLower(strings.TrimSpace(errorType)) {
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "authentication_error":
+		return http.StatusUnauthorized
+	case "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	case "request_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "billing_error":
+		return http.StatusPaymentRequired
+	case "overloaded_error":
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
 func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *dto.ChatCompletionsStreamResponse, claudeInfo *ClaudeResponseInfo) bool {
 	return relayconvert.FormatClaudeResponseInfo(claudeResponse, oaiResponse, claudeInfo)
 }
@@ -94,7 +117,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
-		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+		return types.WithClaudeError(*claudeError, claudeErrorStatusCode(claudeError.Type))
 	}
 	if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
 		info.ObserveResponseModel(claudeResponse.Message.Model)
@@ -350,6 +373,29 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	if err != nil {
 		return nil, err
 	}
+	outcome := info.StreamStatus.OutcomeSnapshot()
+	clientEnded := c.Request.Context().Err() != nil || outcome.EndReason == relaycommon.StreamEndReasonClientGone || outcome.EndReason == relaycommon.StreamEndReasonPingFail
+	terminalReached := outcome.Response == relaycommon.ResponseOutcomeCompleted || outcome.Response == relaycommon.ResponseOutcomeIncomplete
+	if !clientEnded && (!terminalReached || outcome.HasErrors || !info.StreamStatus.ProtocolSucceeded()) {
+		statusCode := http.StatusBadGateway
+		message := "upstream stream ended without a terminal Claude event"
+		switch outcome.EndReason {
+		case relaycommon.StreamEndReasonTimeout:
+			statusCode = http.StatusGatewayTimeout
+			message = "upstream stream timed out before a terminal Claude event"
+		case relaycommon.StreamEndReasonScannerErr:
+			message = "upstream stream failed while reading the Claude response"
+		case relaycommon.StreamEndReasonPanic:
+			statusCode = http.StatusInternalServerError
+			message = "upstream stream failed before a terminal Claude event"
+		}
+		streamErr := types.WithClaudeError(types.ClaudeError{
+			Type:    "api_error",
+			Message: message,
+		}, statusCode, types.ErrOptionWithSkipRetry())
+		info.StreamStatus.MarkFailed(string(streamErr.GetErrorCode()), string(streamErr.GetErrorType()), streamErr.StatusCode)
+		return nil, streamErr
+	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 	return claudeInfo.Usage, nil
@@ -362,7 +408,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
-		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+		return types.WithClaudeError(*claudeError, claudeErrorStatusCode(claudeError.Type))
 	}
 	info.ObserveResponseModel(claudeResponse.Model)
 	maybeMarkClaudeRefusal(c, info, claudeResponse.StopReason)

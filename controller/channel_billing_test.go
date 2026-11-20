@@ -76,10 +76,10 @@ func TestGetDeepSeekBalanceUSD(t *testing.T) {
 			wantErrContains: "USD balance must be finite",
 		},
 		{
-			name:            "rejects negative USD balance",
+			name:            "preserves negative USD balance",
 			responseJSON:    `{"balance_infos":[{"currency":"USD","total_balance":"-1.00"}]}`,
 			usdExchangeRate: 7.3,
-			wantErrContains: "USD balance must be non-negative",
+			want:            -1,
 		},
 		{
 			name:            "rejects positive infinity CNY balance",
@@ -88,10 +88,16 @@ func TestGetDeepSeekBalanceUSD(t *testing.T) {
 			wantErrContains: "CNY balance must be finite",
 		},
 		{
-			name:            "rejects negative CNY balance",
+			name:            "converts negative CNY balance",
 			responseJSON:    `{"balance_infos":[{"currency":"CNY","total_balance":"-7.30"}]}`,
 			usdExchangeRate: 7.3,
-			wantErrContains: "CNY balance must be non-negative",
+			want:            -1,
+		},
+		{
+			name:            "converts negative CNY when USD balance is zero",
+			responseJSON:    `{"balance_infos":[{"currency":"USD","total_balance":"0.00"},{"currency":"CNY","total_balance":"-7.30"}]}`,
+			usdExchangeRate: 7.3,
+			want:            -1,
 		},
 		{
 			name:            "returns error for non-positive CNY exchange rate",
