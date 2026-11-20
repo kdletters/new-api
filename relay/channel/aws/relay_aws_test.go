@@ -22,6 +22,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/eventstreamapi"
@@ -243,27 +244,39 @@ func TestAwsClaudeCompatibilityNormalization(t *testing.T) {
 		name       string
 		model      string
 		wantStrict bool
+		streamPass bool
 	}{
 		{name: "new Bedrock Claude models reject strict", model: "claude-opus-5-5"},
 		{name: "older models keep strict", model: "claude-sonnet-4-6", wantStrict: true},
+		{name: "streaming passthrough uses the resolved Bedrock model", model: "claude-opus-5-5", streamPass: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody))
 			info := &relaycommon.RelayInfo{
 				OriginModelName: tt.model,
+				IsStream:        tt.streamPass,
 				ChannelMeta: &relaycommon.ChannelMeta{
 					ApiKey:            "access-key|secret-key|us-east-1",
 					UpstreamModelName: tt.model,
 				},
 			}
+			info.ChannelSetting.PassThroughBodyEnabled = tt.streamPass
 			adaptor := &Adaptor{}
 			_, err := doAwsClientRequest(ctx, info, adaptor, bytes.NewBufferString(requestBody))
 			require.NoError(t, err)
 
-			awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
-			require.True(t, ok)
+			var body []byte
+			if tt.streamPass {
+				awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput)
+				require.True(t, ok)
+				body = awsReq.Body
+			} else {
+				awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
+				require.True(t, ok)
+				body = awsReq.Body
+			}
 			var payload struct {
 				System   []map[string]any `json:"system"`
 				Messages []struct {
@@ -271,7 +284,7 @@ func TestAwsClaudeCompatibilityNormalization(t *testing.T) {
 				} `json:"messages"`
 				Tools []map[string]any `json:"tools"`
 			}
-			require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
+			require.NoError(t, common.Unmarshal(body, &payload))
 			require.Len(t, payload.System, 2)
 			assert.Equal(t, "system text", payload.System[0]["text"])
 			assert.Equal(t, "Tool added: lookup", payload.System[1]["text"])
@@ -325,6 +338,148 @@ func TestNormalizeAwsClaudePayloadMapPreservesUnrelatedFields(t *testing.T) {
 	assert.Equal(t, map[string]any{"q": "x"}, payload.Messages[0].Content[1]["input"])
 	require.Len(t, payload.Tools, 1)
 	assert.NotContains(t, payload.Tools[0], "strict")
+}
+
+// InvokeModel takes the model and streaming from the request, so the
+// pass-through body keeps no copy of either, even when the client repeats them.
+func TestBuildAwsRequestBodyPassThroughDropsRepeatedModelAndStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"a","stream":true,"max_tokens":8,"stream":false,"model":"b"}`))
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info.ChannelSetting.PassThroughBodyEnabled = true
+
+	body, err := buildAwsRequestBody(c, info, awsTestModel, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, `{"max_tokens":8}`, string(body))
+}
+
+func TestBuildAwsRequestBodyNormalizesOnlyBedrockFields(t *testing.T) {
+	const schema = `{ "properties": {"z":{"type":"integer"},"a":{"type":"number"}}, "minimum":9007199254740993 }`
+	const cache = `{ "z":1e+07, "a":9007199254740993 }`
+	const safeguards = `"safeguards":[{ "z":42, "a":1.00 }]`
+	for _, tc := range []struct {
+		name  string
+		model string
+		body  string
+		want  string
+	}{
+		{
+			name: "clean payload stays byte-for-byte unchanged", model: "claude-sonnet-4-6",
+			body: `{ "tools":[{"strict":true,"input_schema":` + schema + `}], "messages":[{ "role":"user", "content":[{"type":"tool_use","input":` + cache + `}]}], ` + safeguards + ` }`,
+		},
+		{
+			name: "normalize and preserve adjacent raw values", model: "global.anthropic.claude-opus-5-5",
+			body: `{"system":[false,{"type":"image"},{"text":"intro"},{"type":"tool_addition","tool":{"definition":{"name":"lookup"}},"cache_control":` + cache + `}],` +
+				`"messages":[{"role":"user","content":[{"type":"tool_use","input":"{ \"z\":9007199254740993, \"a\":1e+07 }"},{"type":"mid_conv_system","content":[{"type":"tool_result","content":[{"type":"output_text","text":"ok"}]}]}]}],` +
+				`"tools":[{"input_schema":` + schema + `,"strict":false,"strict":true,"function":{"strict":false,"parameters":` + schema + `},"custom":{"strict":true}}],` + safeguards + `}`,
+			want: `{"system":[{"text":"intro","type":"text"},{"type":"text","text":"Tool added: lookup","cache_control":` + cache + `}],` +
+				`"messages":[{"role":"user","content":[{"type":"tool_use","input":{ "z":9007199254740993, "a":1e+07 }},{"type":"mid_conv_system","content":[{"type":"tool_result","content":[{"type":"text","text":"ok"}]}]}]}],` +
+				`"tools":[{"input_schema":` + schema + `,"function":{"parameters":` + schema + `},"custom":{}}],` + safeguards + `}`,
+		},
+		{
+			name: "last controlled member wins and unmatched values survive", model: "claude-sonnet-5",
+			body: `{"system":[{"type":"image"}],"messages":[],"messages":[{"content":[{"type":"tool_use","input":null},{"type":"tool_use"},{"type":"tool_use","input":"[1]"}]}],"tools":[{"custom":{"strict":true},"custom":{"strict":true,"extra":true}}]}`,
+			want: `{"system":null,"messages":[{"content":[{"type":"tool_use","input":{}},{"type":"tool_use","input":{}},{"type":"tool_use","input":"[1]"}]}],"tools":[{"custom":{"extra":true}}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(tc.body))
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+			info.ChannelSetting.PassThroughBodyEnabled = true
+			out, err := buildAwsRequestBody(ctx, info, tc.model, nil)
+			require.NoError(t, err)
+			want := tc.want
+			if want == "" {
+				want = tc.body
+			}
+			assert.Equal(t, want, string(out))
+		})
+	}
+}
+
+func TestDoAwsClientRequest_PreservesSafeguards(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	settings := model_setting.GetGlobalSettings()
+	originalPassthrough := settings.PassThroughRequestEnabled
+	settings.PassThroughRequestEnabled = false
+	t.Cleanup(func() { settings.PassThroughRequestEnabled = originalPassthrough })
+
+	const legacyBody = `{"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["dangerous-tool-use-2026-09-03"],"messages":[{"role":"user","content":"hello"}],"max_tokens":512}`
+	tests := []struct {
+		name       string
+		safeguards string
+	}{
+		{name: "omitted"},
+		{name: "empty_array", safeguards: `[]`},
+		{name: "dangerous_tool_use", safeguards: `[{"type":"dangerous_tool_use","classifier_context":{"v":1,"permission_mode":"auto"}}]`},
+		// Preserve invalid values so AWS can reject them instead of silently disabling the feature.
+		{name: "invalid_object", safeguards: `{"enabled":true,"policy":"strict","blocked_actions":["rm -rf","sudo"]}`},
+	}
+	for _, tt := range tests {
+		for _, stream := range []bool{false, true} {
+			name := tt.name + "/nonstream"
+			if stream {
+				name = tt.name + "/stream"
+			}
+			t.Run(name, func(t *testing.T) {
+				input := map[string]any{
+					"model": "claude-sonnet-5", "max_tokens": 512, "stream": stream,
+					"messages": []map[string]any{{"role": "user", "content": "hello"}},
+				}
+				if tt.safeguards != "" {
+					input["safeguards"] = json.RawMessage(tt.safeguards)
+				}
+				raw, err := common.Marshal(input)
+				require.NoError(t, err)
+				var request dto.ClaudeRequest
+				require.NoError(t, common.Unmarshal(raw, &request))
+
+				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+				ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(raw))
+				ctx.Request.Header.Set("anthropic-beta", "dangerous-tool-use-2026-09-03")
+				info := &relaycommon.RelayInfo{
+					OriginModelName: "claude-sonnet-5",
+					IsStream:        stream,
+					RelayFormat:     relaytypes.RelayFormatClaude,
+					ChannelMeta: &relaycommon.ChannelMeta{
+						ApiKey:            "access-key|secret-key|us-east-1",
+						UpstreamModelName: "global.anthropic.claude-sonnet-5",
+					},
+				}
+				adaptor := &Adaptor{}
+				converted, err := adaptor.ConvertClaudeRequest(ctx, info, &request)
+				require.NoError(t, err)
+				raw, err = common.Marshal(converted)
+				require.NoError(t, err)
+				_, err = doAwsClientRequest(ctx, info, adaptor, bytes.NewReader(raw))
+				require.NoError(t, err)
+
+				var outbound []byte
+				if stream {
+					sdkRequest, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput)
+					require.True(t, ok)
+					outbound = sdkRequest.Body
+				} else {
+					sdkRequest, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
+					require.True(t, ok)
+					outbound = sdkRequest.Body
+				}
+				if tt.safeguards == "" {
+					assert.Equal(t, legacyBody, string(outbound), "legacy requests must remain byte-for-byte unchanged")
+					return
+				}
+				var expected map[string]json.RawMessage
+				require.NoError(t, common.UnmarshalJsonStr(legacyBody, &expected))
+				expected["safeguards"] = json.RawMessage(tt.safeguards)
+				want, err := common.Marshal(expected)
+				require.NoError(t, err)
+				assert.JSONEq(t, string(want), string(outbound))
+			})
+		}
+	}
 }
 
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
@@ -1013,4 +1168,54 @@ func TestMantleCanceledRequestSkipsRetry(t *testing.T) {
 	var apiError *relaytypes.NewAPIError
 	require.ErrorAs(t, err, &apiError)
 	assert.True(t, relaytypes.IsSkipRetryError(apiError))
+}
+
+func TestAWSApiKeyTypeInvokesThroughSDKWithBearerToken(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			info := newMantleTestInfo()
+			info.ChannelOtherSettings.AwsApiType = ""
+			info.ChannelOtherSettings.AwsKeyType = dto.AwsKeyTypeApiKey
+			info.IsStream = stream
+			info.UpstreamModelName = "claude-3-5-sonnet-20240620"
+			c := newAwsTestContext(httptest.NewRecorder(), context.Background())
+			a := &Adaptor{}
+			a.Init(info)
+
+			requestURL, err := a.GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Empty(t, requestURL)
+
+			response, err := a.DoRequest(c, info, strings.NewReader(`{"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+			require.NoError(t, err)
+			assert.Nil(t, response)
+			require.NotNil(t, a.AwsClient)
+
+			var seen *http.Request
+			capture := func(options *bedrockruntime.Options) {
+				options.Retryer = aws.NopRetryer{}
+				options.HTTPClient = awsHTTPClientFunc(func(request *http.Request) (*http.Response, error) {
+					seen = request
+					return nil, errors.New("captured")
+				})
+			}
+			if stream {
+				input, ok := a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput)
+				require.True(t, ok)
+				_, _ = a.AwsClient.InvokeModelWithResponseStream(context.Background(), input, capture)
+			} else {
+				input, ok := a.AwsReq.(*bedrockruntime.InvokeModelInput)
+				require.True(t, ok)
+				_, _ = a.AwsClient.InvokeModel(context.Background(), input, capture)
+			}
+			require.NotNil(t, seen)
+			action := "invoke"
+			if stream {
+				action = "invoke-with-response-stream"
+			}
+			assert.Equal(t, "bedrock-runtime.us-east-1.amazonaws.com", seen.URL.Host)
+			assert.Equal(t, "/model/us."+awsTestModel+"/"+action, seen.URL.Path)
+			assert.Equal(t, "Bearer test-api-key", seen.Header.Get("Authorization"))
+		})
+	}
 }

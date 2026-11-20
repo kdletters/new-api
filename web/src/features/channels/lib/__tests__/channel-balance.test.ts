@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { expect, test } from 'vitest'
 
 import { channelSchema, type Channel } from '../../types'
+import { formatChannelBalanceSummary } from '../channel-balance'
 import {
   channelNeedsAttention,
   getAttentionReason,
@@ -44,7 +45,9 @@ function makeChannel(balance: number, balanceUpdatedTime: number): Channel {
 test('does not present an unqueried zero balance as a real balance', () => {
   const channel = makeChannel(0, 0)
 
-  expect(getKnownChannelBalance(channel)).toBeNull()
+  const balance = getKnownChannelBalance(channel)
+  expect(balance).toBeNull()
+  expect(formatChannelBalanceSummary(channel.balance_detail, balance)).toBe('-')
   expect(channelNeedsAttention(channel)).toBe(false)
 })
 

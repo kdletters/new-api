@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
@@ -186,19 +189,174 @@ func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsModelID
 		if err != nil {
 			return nil, errors.Wrap(err, "get request body bytes fail")
 		}
-		// Nested values keep the client's bytes and key order.
-		var data map[string]json.RawMessage
-		if err := common.Unmarshal(body, &data); err != nil {
-			return nil, errors.Wrap(err, "pass-through unmarshal request body fail")
+		if !ojson.ValidBytes(body) || !ojson.GetBytesNoCopy(body, "@this").IsObject() {
+			return nil, errors.New("pass-through unmarshal request body fail: request body must be a JSON object")
 		}
-		delete(data, "model")
-		delete(data, "stream")
-		if err := normalizeAwsClaudePayloadMap(data, awsModelID); err != nil {
+		data := ojson.NewDoc(body)
+		if err := normalizeAwsClaudePassthrough(data, awsModelID); err != nil {
 			return nil, errors.Wrap(err, "normalize pass-through request body fail")
 		}
-		return common.Marshal(data)
+		for _, key := range []string{"model", "stream"} {
+			if err := relaycommon.DeleteJSONMember(data, key); err != nil {
+				return nil, errors.Wrap(err, "pass-through unmarshal request body fail")
+			}
+		}
+		return data.Bytes(), nil
 	}
 	return common.Marshal(awsClaudeReq)
+}
+
+func awsClaudeEffectiveMembers(doc *ojson.Doc, prefix string, object ojson.Result, keys ...string) (map[string]ojson.Result, error) {
+	if !object.IsObject() {
+		return nil, nil
+	}
+	fields := make(map[string]ojson.Result, len(keys))
+	for key, value := range object.All() {
+		if !slices.Contains(keys, key.Str) {
+			continue
+		}
+		if _, repeated := fields[key.Str]; repeated {
+			if err := doc.Delete(prefix + key.Str); err != nil {
+				return nil, err
+			}
+		}
+		fields[key.Str] = value
+	}
+	return fields, nil
+}
+
+func normalizeAwsClaudePassthrough(doc *ojson.Doc, awsModelID string) error {
+	fields, err := awsClaudeEffectiveMembers(doc, "", doc.Get("@this"), "system", "messages", "tools")
+	if err != nil {
+		return err
+	}
+	if err := normalizeAwsClaudePassthroughBlocks(doc, "system", fields["system"], true); err != nil {
+		return err
+	}
+	messages := fields["messages"]
+	if messages.Type != ojson.Null && !messages.IsArray() {
+		return errors.New("messages must be an array")
+	}
+	if messages.IsArray() {
+		for index, message := range messages.All() {
+			prefix := "messages." + index.String() + "."
+			content, err := awsClaudeEffectiveMembers(doc, prefix, message, "content")
+			if err != nil {
+				return err
+			}
+			if err := normalizeAwsClaudePassthroughBlocks(doc, prefix+"content", content["content"], false); err != nil {
+				return err
+			}
+		}
+	}
+	tools := fields["tools"]
+	if !tools.IsArray() || !awsClaudeRejectsToolStrict(awsModelID) {
+		return nil
+	}
+	for index, tool := range tools.All() {
+		if !tool.IsObject() {
+			continue
+		}
+		prefix := "tools." + index.String() + "."
+		if _, err := awsClaudeEffectiveMembers(doc, prefix, tool, "custom", "function"); err != nil {
+			return err
+		}
+		for _, key := range []string{"strict", "custom.strict", "function.strict"} {
+			if err := relaycommon.DeleteJSONMember(doc, prefix+key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeAwsClaudePassthroughBlocks(doc *ojson.Doc, path string, blocks ojson.Result, system bool) error {
+	if !blocks.IsArray() {
+		return nil
+	}
+	kept := 0
+	for block := range blocks.Values() {
+		blockPath := path + "." + strconv.Itoa(kept)
+		fields, err := awsClaudeEffectiveMembers(doc, blockPath+".", block, "type")
+		if err != nil {
+			return err
+		}
+		kind := fields["type"].Str
+		if kind == "" {
+			text, err := awsClaudeEffectiveMembers(doc, blockPath+".", block, "text")
+			if err != nil {
+				return err
+			}
+			if text["text"].Str != "" {
+				kind = "input_text"
+			}
+		}
+		if system && !slices.Contains([]string{"text", "input_text", "output_text", "tool_addition", "tool_removal"}, kind) {
+			if err := doc.Delete(blockPath); err != nil {
+				return err
+			}
+			continue
+		}
+		switch kind {
+		case "input_text", "output_text":
+			if err := doc.Set(blockPath+".type", "text"); err != nil {
+				return err
+			}
+		case "tool_addition", "tool_removal":
+			var change map[string]any
+			if err := common.UnmarshalJsonStr(block.Raw, &change); err != nil {
+				return err
+			}
+			cache, err := awsClaudeEffectiveMembers(doc, blockPath+".", block, "cache_control")
+			if err != nil {
+				return err
+			}
+			if err := doc.SetRaw(blockPath, `{"type":"text"}`); err != nil {
+				return err
+			}
+			if err := doc.Set(blockPath+".text", awsClaudeToolChangeSummary(change)); err != nil {
+				return err
+			}
+			if value := cache["cache_control"]; value.Exists() {
+				if err := doc.SetRaw(blockPath+".cache_control", value.Raw); err != nil {
+					return err
+				}
+			}
+		case "tool_result", "mid_conv_system":
+			content, err := awsClaudeEffectiveMembers(doc, blockPath+".", block, "content")
+			if err != nil {
+				return err
+			}
+			if err := normalizeAwsClaudePassthroughBlocks(doc, blockPath+".content", content["content"], false); err != nil {
+				return err
+			}
+		case "tool_use":
+			inputs, err := awsClaudeEffectiveMembers(doc, blockPath+".", block, "input")
+			if err != nil {
+				return err
+			}
+			input := inputs["input"]
+			raw := ""
+			if input.Type == ojson.Null {
+				raw = `{}`
+			} else if input.Type == ojson.String && ojson.Valid(input.Str) {
+				parsed := ojson.Parse(input.Str)
+				if parsed.IsObject() || parsed.Type == ojson.Null {
+					raw = parsed.Raw
+				}
+			}
+			if raw != "" {
+				if err := doc.SetRaw(blockPath+".input", raw); err != nil {
+					return err
+				}
+			}
+		}
+		kept++
+	}
+	if system && kept == 0 {
+		return doc.SetRaw(path, "null")
+	}
+	return nil
 }
 
 func getAwsRegionPrefix(awsRegionId string) string {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
@@ -14,7 +15,6 @@ import (
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/tidwall/sjson"
 )
 
 func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
@@ -120,7 +120,7 @@ func normalizeClaudeToolInputSchemasRaw(rawTools json.RawMessage) (json.RawMessa
 		if err != nil {
 			continue
 		}
-		updated, err := sjson.SetRawBytes(tools[index], "input_schema", flattened)
+		updated, err := ojson.SetRawBytes(tools[index], "input_schema", flattened)
 		if err != nil {
 			continue
 		}
