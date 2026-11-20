@@ -24,7 +24,7 @@ import type {
   ProcessedChartData,
   ProcessedUserChartData,
 } from '@/features/dashboard/types'
-import { getCurrencyDisplay } from '@/lib/currency'
+import { formatQuotaWithCurrency, getCurrencyDisplay } from '@/lib/currency'
 import { formatChartTime, type TimeGranularity } from '@/lib/time'
 
 type TFunction = (key: string) => string
@@ -50,8 +50,11 @@ export function getDashboardChartColors(domainLength: number): string[] {
   )
 }
 
-function renderQuotaCompat(rawQuota: number, digits = 4): string {
-  const { config, meta } = getCurrencyDisplay()
+function renderQuotaCompat(
+  rawQuota: number,
+  digits = 4,
+  { config, meta } = getCurrencyDisplay()
+): string {
   if (meta.kind === 'tokens') return rawQuota.toLocaleString()
   const usd = rawQuota / config.quotaPerUnit
   const rate = 'exchangeRate' in meta ? meta.exchangeRate : 1
@@ -71,15 +74,29 @@ export function processChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
   t?: TFunction,
-  chartCornerRadius?: number
+  chartCornerRadius?: number,
+  currency = getCurrencyDisplay()
 ): ProcessedChartData {
   const tt: TFunction = t ?? ((x) => x)
   const otherLabel = tt('Other')
 
   const formatInt = (value: number) =>
     Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
-  const formatQuotaValue = (value: number) => renderQuotaCompat(value, 4)
-  const formatQuotaTotal = (value: number) => renderQuotaCompat(value, 2)
+  const formatQuotaValue = (value: number) =>
+    renderQuotaCompat(value, 4, currency)
+  const formatQuotaTotal = (value: number) =>
+    renderQuotaCompat(value, 2, currency)
+  const quotaAxes = [
+    { orient: 'bottom', type: 'band' },
+    {
+      orient: 'left',
+      type: 'linear',
+      label: {
+        formatMethod: (value: string | number) =>
+          formatQuotaWithCurrency(Number(value), { digitsLarge: 4 }, currency),
+      },
+    },
+  ]
 
   const MAX_TOOLTIP_MODELS = 15
   const isOtherTooltipKey = (key: string) =>
@@ -169,7 +186,8 @@ export function processChartData(
         type: 'bar',
         data: [{ id: 'barData', values: [] }],
         xField: 'Time',
-        yField: 'Usage',
+        yField: 'rawQuota',
+        axes: quotaAxes,
         seriesField: 'Model',
         stack: true,
         legends: { visible: true, selectMode: 'single' },
@@ -178,7 +196,8 @@ export function processChartData(
         type: 'area',
         data: [{ id: 'areaData', values: [] }],
         xField: 'Time',
-        yField: 'Usage',
+        yField: 'rawQuota',
+        axes: quotaAxes,
         seriesField: 'Model',
         stack: true,
         legends: { visible: true, selectMode: 'single' },
@@ -211,9 +230,6 @@ export function processChartData(
       totalCountDisplay: formatInt(0),
     }
   }
-
-  const { config } = getCurrencyDisplay()
-  const quotaPerUnit = config.quotaPerUnit
 
   // Aggregate all metrics by time and model
   const timeModelMap = new Map<
@@ -320,12 +336,11 @@ export function processChartData(
     }))
     .sort((a, b) => b.value - a.value)
 
-  // Stacked bar: model quota distribution (quota -> USD)
+  // Stacked bar: model quota distribution
   const lineValues: Array<{
     Time: string
     Model: string
     rawQuota: number
-    Usage: number
     TimeSum: number
   }> = []
 
@@ -333,14 +348,10 @@ export function processChartData(
     let timeData = sortedModels.map((model) => {
       const stats = timeModelMap.get(time)?.get(model)
       const rawQuota = Number(stats?.quota) || 0
-      const usd = rawQuota ? rawQuota / quotaPerUnit : 0
-      // Match legacy frontend getQuotaWithUnit(..., 4)
-      const usage = usd ? Number(usd.toFixed(4)) : 0
       return {
         Time: time,
         Model: model,
         rawQuota,
-        Usage: usage,
         TimeSum: 0,
       }
     })
@@ -365,28 +376,21 @@ export function processChartData(
 
   const areaValues: typeof lineValues = []
   chartTimes.forEach((time) => {
-    const buckets = new Map<string, { rawQuota: number; usage: number }>()
+    const buckets = new Map<string, number>()
     const modelMap = timeModelMap.get(time)
     let timeSum = 0
     sortedModels.forEach((model) => {
       const stats = modelMap?.get(model)
       const rawQuota = Number(stats?.quota) || 0
-      const usd = rawQuota ? rawQuota / quotaPerUnit : 0
-      const usage = usd ? Number(usd.toFixed(4)) : 0
       timeSum += rawQuota
       const key = topAreaModels.has(model) ? model : otherLabel
-      const prev = buckets.get(key) || { rawQuota: 0, usage: 0 }
-      buckets.set(key, {
-        rawQuota: prev.rawQuota + rawQuota,
-        usage: Number((prev.usage + usage).toFixed(4)),
-      })
+      buckets.set(key, (buckets.get(key) ?? 0) + rawQuota)
     })
-    for (const [model, vals] of buckets) {
+    for (const [model, rawQuota] of buckets) {
       areaValues.push({
         Time: time,
         Model: model,
-        rawQuota: vals.rawQuota,
-        Usage: vals.usage,
+        rawQuota,
         TimeSum: timeSum,
       })
     }
@@ -497,7 +501,8 @@ export function processChartData(
       type: 'bar',
       data: [{ id: 'barData', values: lineValues }],
       xField: 'Time',
-      yField: 'Usage',
+      yField: 'rawQuota',
+      axes: quotaAxes,
       seriesField: 'Model',
       stack: true,
       legends: { visible: true, selectMode: 'single' },
@@ -535,7 +540,8 @@ export function processChartData(
       type: 'area',
       data: [{ id: 'areaData', values: areaValues }],
       xField: 'Time',
-      yField: 'Usage',
+      yField: 'rawQuota',
+      axes: quotaAxes,
       seriesField: 'Model',
       stack: false,
       legends: { visible: true, selectMode: 'single' },

@@ -16,10 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, expect, test } from 'vitest'
+import { beforeEach, describe, expect, test } from 'vitest'
 
-import type { QuotaDataItem } from '@/features/dashboard/types'
-import type { TimeGranularity } from '@/lib/time'
+import type {
+  ProcessedChartData,
+  QuotaDataItem,
+} from '@/features/dashboard/types'
+import { formatChartTime, type TimeGranularity } from '@/lib/time'
+import {
+  DEFAULT_CURRENCY_CONFIG,
+  useSystemConfigStore,
+} from '@/stores/system-config-store'
 
 import { processChartData, processUserChartData } from '../charts'
 
@@ -152,5 +159,90 @@ describe.each(cases)('dashboard $granularity chart chronology', (scenario) => {
         )
       ).toEqual([0, 0, 0, 0, 0, 0, 8])
     }
+  })
+})
+
+function leftTickAt(
+  spec: ProcessedChartData['spec_line'],
+  category: string
+): string {
+  const row = spec.data[0].values.find(
+    (point: Record<string, unknown>) => point[spec.xField] === category
+  )
+  expect(row, `Missing chart data for ${category}`).toBeDefined()
+  const value = row[spec.yField]
+  const leftAxis = spec.axes?.find(
+    (axis: { orient: string }) => axis.orient === 'left'
+  )
+  const format = leftAxis?.label?.formatMethod
+  return String(format ? format(value, { rawValue: value }) : value)
+}
+
+describe('dashboard left axis units', () => {
+  const point = {
+    created_at: new Date('2026-01-15T12:00:00').getTime() / 1000,
+    model_name: 'model-a',
+    count: 3,
+    token_used: 91,
+  }
+  const day = formatChartTime(point.created_at)
+  const currency = {
+    ...DEFAULT_CURRENCY_CONFIG,
+    quotaPerUnit: 400_000,
+    usdExchangeRate: 7,
+    customCurrencySymbol: '★',
+    customCurrencyExchangeRate: 2.5,
+  }
+
+  beforeEach(() => {
+    const { config } = useSystemConfigStore.getState()
+    const storageKey = 'system-config-storage'
+    const stored = localStorage.getItem(storageKey)
+    return () => {
+      useSystemConfigStore.setState({ config })
+      if (stored === null) localStorage.removeItem(storageKey)
+      else localStorage.setItem(storageKey, stored)
+    }
+  })
+
+  describe.each([
+    { chart: 'bar', key: 'spec_line' },
+    { chart: 'area', key: 'spec_area' },
+  ] as const)('consumption $chart', ({ key }) => {
+    test.each([
+      { mode: 'CNY', quota: 800_000, symbol: '¥', amount: 14 },
+      { mode: 'USD', quota: 800_000, symbol: '$', amount: 2 },
+      { mode: 'CUSTOM', quota: 800_000, symbol: '★', amount: 5 },
+      { mode: 'TOKENS', quota: 7, symbol: '', amount: 7 },
+    ] as const)(
+      'shows the plotted quota in $mode',
+      ({ mode, quota, symbol, amount }) => {
+        useSystemConfigStore.getState().setConfig({
+          currency: {
+            ...currency,
+            quotaDisplayType: mode,
+            displayInCurrency: mode !== 'TOKENS',
+          },
+        })
+        const charts = processChartData([{ ...point, quota }])
+
+        const tick = leftTickAt(charts[key], day)
+        if (symbol) expect.soft(tick).toContain(symbol)
+        const numberText = tick.replace(symbol, '').trim()
+        expect(Number(numberText.replace(',', '.'))).toBe(amount)
+      }
+    )
+  })
+
+  test('keeps call trend and ranking ticks in requests when quota uses CNY', () => {
+    useSystemConfigStore.getState().setConfig({
+      currency: { ...currency, quotaDisplayType: 'CNY' },
+    })
+    const charts = processChartData([{ ...point, quota: 800_000 }])
+
+    expect(Number(leftTickAt(charts.spec_model_line, day))).toBe(point.count)
+    expect(Number(leftTickAt(charts.spec_rank_bar, point.model_name))).toBe(
+      point.count
+    )
   })
 })
